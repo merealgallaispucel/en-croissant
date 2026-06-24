@@ -60,7 +60,7 @@ function OpeningsTable({ openings, loading }: { openings: Opening[]; loading: bo
                 </Text>
               );
             return (
-              <Text fz="sm">{moveNotationType === "symbols" ? addPieceSymbol(move) : move}</Text>
+              <Text fz="sm">{moveNotationType === "symbols" ? addPieceSymbol(move) : moveNotationType === "french" ? addPieceSymbol(move, "french") : move}</Text>
             );
           },
         },

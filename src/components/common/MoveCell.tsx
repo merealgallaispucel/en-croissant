@@ -65,7 +65,7 @@ function MoveCell(props: MoveCellProps) {
     >
       <Box component="span" className={classes.moveText}>
         {props.isStart && <IconFlag style={{ marginRight: 5 }} size="0.875rem" />}
-        {moveNotationType === "symbols" ? addPieceSymbol(props.move) : props.move}
+        {moveNotationType === "symbols" ? addPieceSymbol(props.move) : moveNotationType === "french" ? addPieceSymbol(props.move, "french") : props.move}
         {showComments ? props.annotations.join("") : ""}
       </Box>
       {props.rightAccessory && (

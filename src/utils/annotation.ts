@@ -1,8 +1,15 @@
 import type { MantineColor } from "@mantine/core";
 
 const pieceChars = { K: "♔", Q: "♕", R: "♖", B: "♗", N: "♘" };
+const frenchPieceChars = { K: "R", Q: "D", R: "T", B: "F", N: "C" };
 
-export function addPieceSymbol(move: string): string {
+export function addPieceSymbol(move: string, notationType?: "letters" | "symbols" | "french"): string {
+    if (notationType === "french") {
+        const frenchChar = frenchPieceChars[move[0] as keyof typeof frenchPieceChars];
+        if (typeof frenchChar === "undefined") return move;
+        return frenchChar + move.slice(1);
+    }
+    
     const pieceChar = pieceChars[move[0] as keyof typeof pieceChars];
 
     if (typeof pieceChar === "undefined") return move;

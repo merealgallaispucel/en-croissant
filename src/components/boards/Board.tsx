@@ -36,6 +36,7 @@ import {
   moveHighlightAtom,
   moveInputAtom,
   practiceCardStartTimeAtom,
+  practiceRestartLineOnMistakeAtom,
   practiceSessionStatsAtom,
   practiceStateAtom,
   showArrowsAtom,
@@ -119,7 +120,9 @@ function Board({
 
   const goToNext = useStore(store, (s) => s.goToNext);
   const goToPrevious = useStore(store, (s) => s.goToPrevious);
+  const goToMove = useStore(store, (s) => s.goToMove);
   const storeMakeMove = useStore(store, (s) => s.makeMove);
+  const setPracticePath = useStore(store, (s) => s.setPracticePath);
   const setHeaders = useStore(store, (s) => s.setHeaders);
   const clearShapes = useStore(store, (s) => s.clearShapes);
   const setShapes = useStore(store, (s) => s.setShapes);
@@ -173,6 +176,7 @@ function Board({
   const setPracticeState = useSetAtom(practiceStateAtom);
   const [sessionStats, setSessionStats] = useAtom(practiceSessionStatsAtom);
   const cardStartTime = useAtomValue(practiceCardStartTimeAtom);
+  const practiceRestartLineOnMistake = useAtomValue(practiceRestartLineOnMistakeAtom);
 
   async function makeMove(move: NormalMove) {
     if (!pos) return;
@@ -209,7 +213,15 @@ function Board({
           color: "red",
         });
         await new Promise((resolve) => setTimeout(resolve, 500));
-        goToNext();
+        
+        if (practiceRestartLineOnMistake) {
+          // Restart the line from the beginning (start position or root)
+          const startPosition = headers.start || [];
+          goToMove(startPosition);
+          setPracticePath(startPosition);
+        } else {
+          goToNext();
+        }
       } else {
         storeMakeMove({
           payload: move,

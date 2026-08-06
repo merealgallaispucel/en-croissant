@@ -538,6 +538,11 @@ export const practiceAutoDifficultyAtom = atomWithStorage<"none" | "1" | "2" | "
     "none",
 );
 
+export const practiceRestartLineOnMistakeAtom = atomWithStorage<boolean>(
+    "practice-restart-line-on-mistake",
+    false,
+);
+
 const practiceCardStartTimeFamily = atomFamily((_tab: string) => atom<number>(0));
 export const practiceCardStartTimeAtom = tabValue(practiceCardStartTimeFamily);
 

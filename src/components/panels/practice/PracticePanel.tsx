@@ -11,6 +11,7 @@ import {
   Progress,
   SimpleGrid,
   Stack,
+  Switch,
   Tabs,
   Text,
   ThemeIcon,
@@ -59,6 +60,7 @@ import {
   practiceSessionStatsAtom,
   practiceStateAtom,
   practiceAutoDifficultyAtom,
+  practiceRestartLineOnMistakeAtom,
 } from "@/state/atoms";
 import { getTabFile, getTabGameNumber } from "@/utils/tabs";
 import { findFen, getNodeAtPath } from "@/utils/treeReducer";
@@ -131,6 +133,9 @@ function PracticePanel() {
   const [sessionStats, setSessionStats] = useAtom(practiceSessionStatsAtom);
   const setCardStartTime = useSetAtom(practiceCardStartTimeAtom);
   const practiceAutoDifficulty = useAtomValue(practiceAutoDifficultyAtom);
+  const [practiceRestartLineOnMistake, setPracticeRestartLineOnMistake] = useAtom(
+    practiceRestartLineOnMistakeAtom,
+  );
 
   const newPractice = useCallback(
     (stats?: Partial<PracticeSessionStats>) => {
@@ -517,6 +522,19 @@ function PracticePanel() {
                     >
                       {t("Board.Practice.PracticeFullRepertoire")}
                     </Button>
+                    <Divider />
+                    <Group gap="xs" justify="space-between">
+                      <Text fz="sm" c="dimmed">
+                        {t("Board.Practice.RestartLineOnMistake")}
+                      </Text>
+                      <Switch
+                        size="sm"
+                        checked={practiceRestartLineOnMistake}
+                        onChange={(e) =>
+                          setPracticeRestartLineOnMistake(e.currentTarget.checked)
+                        }
+                      />
+                    </Group>
                   </Stack>
                 )}
 

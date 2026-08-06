@@ -151,6 +151,7 @@
     "Board.Practice.Rating": "Classement",
     "Board.Practice.Reset.Description": "Êtes-vous sûr de vouloir réinitialiser les données d'ouverture pour « {{name}} » ? Toute la progression de l'apprentissage sera perdue.",
     "Board.Practice.Reset.Title": "Réinitialiser les données d'ouverture",
+    "Board.Practice.RestartLineOnMistake": "Recommencer la ligne en cas d'erreur",
     "Board.Practice.SessionCorrect": "Correct",
     "Board.Practice.SessionIncorrect": "Incorrect",
     "Board.Practice.ShowAll": "Montrer toutes les positions",

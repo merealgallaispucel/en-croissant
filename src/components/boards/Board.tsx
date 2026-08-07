@@ -445,7 +445,9 @@ function Board({
     !!headers.white_time_control ||
     !!headers.black_time_control;
 
-  const practiceLock = !!practicing && !deck.positions.find((c) => c.fen === currentNode.fen);
+  const practiceLock = !!practicing && 
+    sessionStats.mode !== "lines" && 
+    !deck.positions.find((c) => c.fen === currentNode.fen);
 
   const movableColor: "white" | "black" | "both" | undefined = useMemo(() => {
     return practiceLock

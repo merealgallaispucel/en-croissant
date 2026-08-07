@@ -473,6 +473,46 @@ const practiceDataSchema = z.object({
     logs: reviewLogSchema.array(),
 });
 
+
+// Line type for line-based practice
+export type Line = {
+    id: string;
+    name: string;
+    startFen: string;
+    endFen: string;
+    path: number[];
+    startPath: number[];
+    moves: string[];
+    fullMoves: string[];
+    card: import("ts-fsrs").Card;
+};
+
+export type LinesPracticeData = {
+    lines: Line[];
+    logs: (import("ts-fsrs").ReviewLog & { lineId: string })[];
+};
+
+const lineSchema = z.object({
+    id: z.string(),
+    name: z.string(),
+    startFen: z.string(),
+    endFen: z.string(),
+    path: z.array(z.number()),
+    startPath: z.array(z.number()),
+    moves: z.array(z.string()),
+    fullMoves: z.array(z.string()),
+    card: z.object({}).passthrough(),
+});
+
+const linesPracticeDataSchema = z.object({
+    lines: z.array(lineSchema),
+    logs: z.array(
+        z.object({
+            lineId: z.string(),
+        }).passthrough()
+    ),
+});
+
 export type PracticeData = {
     positions: Position[];
     logs: (ReviewLog & { fen: string })[];
@@ -488,7 +528,19 @@ export const deckAtomFamily = atomFamily(
             },
             createZodStorage(practiceDataSchema, localStorage) as any as SyncStorage<PracticeData>, // TODO: fix types
         ),
+    (a, b) => a.file === b.file && a.game === b.game,
+);
 
+export const linesDeckAtomFamily = atomFamily(
+    ({ file, game }: { file: string; game: number }) =>
+        atomWithStorage<LinesPracticeData>(
+            `lines-deck-${file}-${game}`,
+            {
+                lines: [],
+                logs: [],
+            },
+            createZodStorage(linesPracticeDataSchema, localStorage) as any as SyncStorage<LinesPracticeData>,
+        ),
     (a, b) => a.file === b.file && a.game === b.game,
 );
 
@@ -505,6 +557,7 @@ export type PracticeState = {
     playedMove?: string;
     timeTaken?: number;
     positionIndex?: number;
+    lineIndex?: number;
 };
 
 export const practiceStateFamily = atomFamily((_tab: string) =>
@@ -513,8 +566,9 @@ export const practiceStateFamily = atomFamily((_tab: string) =>
 export const practiceStateAtom = tabValue(practiceStateFamily);
 
 export type PracticeSessionStats = {
-    mode: "anki" | "full";
+    mode: "anki" | "full" | "lines";
     remainingPositions: number[];
+    remainingLines?: number[];
     correct: number;
     incorrect: number;
     streak: number;

@@ -39,12 +39,18 @@ import ConfirmModal from "@/components/common/ConfirmModal";
 import { TreeStateContext } from "@/components/common/TreeStateContext";
 import {
   buildFromTree,
+  buildLinesFromTree,
   formatReviewInterval,
   getCardForReview,
+  getLineForReview,
+  getLineStats,
   getNextReviewTimes,
   getStats,
+  Line,
   syncDeck,
+  syncLinesDeck,
   updateCardPerformance,
+  updateLinePerformance,
 } from "@/components/files/opening";
 import {
   currentEvalOpenAtom,
@@ -53,6 +59,7 @@ import {
   currentShowCommentsAtom,
   currentTabAtom,
   deckAtomFamily,
+  linesDeckAtomFamily,
   type PracticeData,
   type PracticeSessionStats,
   practiceCardStartTimeAtom,
@@ -84,6 +91,13 @@ function PracticePanel() {
       game: getTabGameNumber(currentTab),
     }),
   );
+  
+  const [linesDeck, setLinesDeck] = useAtom(
+    linesDeckAtomFamily({
+      file: tabFile?.path || "",
+      game: getTabGameNumber(currentTab),
+    }),
+  );
 
   const [syncMessage, setSyncMessage] = useState<{
     added: number;
@@ -91,6 +105,8 @@ function PracticePanel() {
   } | null>(null);
   const deckPositionsRef = useRef(deck.positions);
   deckPositionsRef.current = deck.positions;
+  const linesDeckRef = useRef(linesDeck.lines);
+  linesDeckRef.current = linesDeck.lines;
   const lastSyncedTreeRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -100,6 +116,7 @@ function PracticePanel() {
     const orientation = headers.orientation || "white";
     const start = headers.start || [];
 
+    // Sync positions deck
     if (deckPositionsRef.current.length === 0) {
       const newDeck = buildFromTree(root, orientation, start);
       if (newDeck.length > 0) {
@@ -119,8 +136,27 @@ function PracticePanel() {
         setTimeout(() => setSyncMessage(null), 5000);
       }
     }
+    
+    // Sync lines deck
+    if (linesDeckRef.current.length === 0) {
+      const newLines = buildLinesFromTree(root, orientation, start);
+      if (newLines.length > 0) {
+        setLinesDeck({ lines: newLines, logs: [] });
+      }
+    } else {
+      // Sync existing lines with tree changes
+      const { lines, added: linesAdded, removed: linesRemoved } = syncLinesDeck(
+        linesDeckRef.current,
+        root,
+        orientation,
+        start,
+      );
+      if (linesAdded > 0 || linesRemoved > 0) {
+        setLinesDeck((prev) => ({ ...prev, lines }));
+      }
+    }
     lastSyncedTreeRef.current = treeFingerprint;
-  }, [root, headers, setDeck]);
+  }, [root, headers, setDeck, setLinesDeck]);
 
   const stats = getStats(deck.positions);
 
@@ -182,6 +218,61 @@ function PracticePanel() {
       setPracticeState,
     ],
   );
+  const newLinePractice = useCallback(
+    (stats?: Partial<PracticeSessionStats>) => {
+      if (linesDeck.lines.length === 0) return;
+
+      const currentMode = stats?.mode ?? sessionStats.mode;
+      const remainingLines = stats?.remainingLines ?? sessionStats.remainingLines;
+
+      let line: Line | null;
+
+      if (currentMode === "full") {
+        if (remainingLines && remainingLines.length > 0) {
+          line = linesDeck.lines[remainingLines[0]];
+        } else {
+          line = null;
+        }
+      } else {
+        line = getLineForReview(linesDeck.lines);
+      }
+
+      if (!line) {
+        setPracticeState({ phase: "idle" });
+        setPracticePath(null);
+        setInvisible(false);
+        setShowComments(true);
+        setEvalOpen(true);
+        return;
+      }
+      // Go to the start of the line
+      goToMove(line.startPath);
+      setPracticePath(line.startPath);
+      setInvisible(true);
+      setShowComments(false);
+      setEvalOpen(false);
+      setCardStartTime(Date.now());
+      setPracticeState({ 
+        phase: "waiting", 
+        currentFen: line.startFen,
+        lineIndex: linesDeck.lines.indexOf(line)
+      });
+    },
+    [
+      linesDeck.lines,
+      sessionStats.mode,
+      sessionStats.remainingLines,
+      root,
+      goToMove,
+      setPracticePath,
+      setInvisible,
+      setShowComments,
+      setEvalOpen,
+      setCardStartTime,
+      setPracticeState,
+    ],
+  );
+
 
   useEffect(() => {
     if (practiceState.phase === "correct") {
@@ -229,6 +320,38 @@ function PracticePanel() {
   ]);
 
   function handleQualityRating(grade: 1 | 2 | 3 | 4) {
+    // Handle lines mode
+    if (sessionStats.mode === "lines" && practiceState.phase === "correct" && practiceState.lineIndex !== undefined) {
+      const lineIndex = practiceState.lineIndex;
+      const line = linesDeck.lines[lineIndex];
+      if (line) {
+        updateLinePerformance(setLinesDeck, lineIndex, line.card, grade);
+        setSessionStats((prev) => ({
+          ...prev,
+          correct: prev.correct + 1,
+          streak: prev.streak + 1,
+          bestStreak: Math.max(prev.bestStreak, prev.streak + 1),
+        }));
+        
+        // Move to next line or go back to idle
+        const currentRemainingLines = sessionStats.remainingLines || [];
+        if (currentRemainingLines.length > 1) {
+          const nextRemainingLines = currentRemainingLines.slice(1);
+          setSessionStats((prev) => ({ ...prev, remainingLines: nextRemainingLines }));
+          newLinePractice({ remainingLines: nextRemainingLines, mode: "lines" });
+        } else {
+          // No more lines
+          setPracticeState({ phase: "idle" });
+          setPracticePath(null);
+          setInvisible(false);
+          setShowComments(true);
+          setEvalOpen(true);
+        }
+      }
+      return;
+    }
+    
+    // Original logic for position-based modes
     if (practiceState.phase !== "correct" || practiceState.positionIndex === undefined) return;
 
     const { positionIndex } = practiceState;
@@ -270,6 +393,21 @@ function PracticePanel() {
     setSessionStats((prev) => ({ ...prev, ...stats }));
     newPractice(stats);
   }
+  function startLinesPractice() {
+    const indices = linesDeck.lines.map((_, i) => i);
+    const stats: Partial<PracticeSessionStats> = {
+      mode: "lines",
+      remainingPositions: [],
+      remainingLines: indices,
+      correct: 0,
+      incorrect: 0,
+      streak: 0,
+      bestStreak: 0,
+    };
+    setSessionStats((prev) => ({ ...prev, ...stats }));
+    newLinePractice(stats);
+  }
+
 
   function skipCard() {
     if (sessionStats.mode === "full" && sessionStats.remainingPositions.length > 0) {
@@ -516,6 +654,22 @@ function PracticePanel() {
                       }
                     >
                       {t("Board.Practice.PracticeFullRepertoire")}
+                    </Button>
+                    <Button
+                      size="md"
+                      variant="light"
+                      color="blue"
+                      fullWidth
+                      onClick={startLinesPractice}
+                      leftSection={<IconTarget size={20} />}
+                      justify="space-between"
+                      rightSection={
+                        <Badge size="sm" variant="white" color="blue">
+                          {linesDeck.lines.length}
+                        </Badge>
+                      }
+                    >
+                      {t("Board.Practice.PracticeLines")}
                     </Button>
                   </Stack>
                 )}

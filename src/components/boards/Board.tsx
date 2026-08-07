@@ -177,7 +177,6 @@ function Board({
   const cardStartTime = useAtomValue(practiceCardStartTimeAtom);
   const setInvisible = useSetAtom(currentInvisibleAtom);
   const setShowComments = useSetAtom(currentShowCommentsAtom);
-  const setEvalOpen = useSetAtom(currentEvalOpenAtom);
 
   async function makeMove(move: NormalMove) {
     if (!pos) return;

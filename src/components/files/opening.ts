@@ -8,6 +8,49 @@ import { type TreeNode, treeIterator } from "@/utils/treeReducer";
 const params = generatorParameters({ enable_fuzz: true });
 
 const f = fsrs(params);
+// Extract all main lines from the tree for lines mode practice
+export function getLinesFromTree(tree: TreeNode, start: number[] = []): number[][] {
+    const lines: number[][] = [];
+    const stack: { path: number[]; node: TreeNode }[] = [{ path: [], node: tree }];
+    
+    while (stack.length > 0) {
+        const { path, node } = stack.pop()!;
+        
+        // Skip if this is before the start position
+        if (!isPrefix(start, path)) {
+            continue;
+        }
+        
+        // If this node has children, it's part of a line
+        if (node.children.length > 0) {
+            // Follow the main line (first child)
+            const mainLinePath = [...path, 0];
+            const mainLineNode = node.children[0];
+            
+            // Add the complete main line from this point
+            let currentPath = [...path];
+            let currentNode = node;
+            const line: number[] = [...path];
+            
+            while (currentNode.children.length > 0) {
+                line.push(0); // Always take the first child for main line
+                currentNode = currentNode.children[0];
+            }
+            
+            // Only add if the line has moves beyond the start position
+            if (line.length > start.length) {
+                lines.push(line);
+            }
+            
+            // Also explore variations
+            for (let i = 1; i < node.children.length; i++) {
+                stack.push({ path: [...path, i], node: node.children[i] });
+            }
+        }
+    }
+    
+    return lines;
+}
 
 export const positionSchema = z.object({
     fen: z.string(),

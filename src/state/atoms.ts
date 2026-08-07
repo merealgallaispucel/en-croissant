@@ -496,7 +496,9 @@ export type PracticePhase =
     | "idle" // Not practicing
     | "waiting" // Waiting for user to make a move
     | "correct" // Move was correct, waiting for quality rating
-    | "incorrect"; // Move was incorrect, showing feedback
+    | "incorrect" // Move was incorrect, showing feedback
+    | "lines_waiting" // Waiting for user to make a move in lines mode
+    | "lines_correct"; // Move was correct in lines mode, waiting for opponent move
 
 export type PracticeState = {
     phase: PracticePhase;
@@ -505,6 +507,10 @@ export type PracticeState = {
     playedMove?: string;
     timeTaken?: number;
     positionIndex?: number;
+    // Lines mode specific fields
+    linePath?: number[]; // Current path in the line being practiced
+    lineTargetPath?: number[]; // Target path to reach in lines mode
+    lineOrientation?: "white" | "black"; // Orientation for lines mode
 };
 
 export const practiceStateFamily = atomFamily((_tab: string) =>
@@ -513,7 +519,7 @@ export const practiceStateFamily = atomFamily((_tab: string) =>
 export const practiceStateAtom = tabValue(practiceStateFamily);
 
 export type PracticeSessionStats = {
-    mode: "anki" | "full";
+    mode: "anki" | "full" | "lines";
     remainingPositions: number[];
     correct: number;
     incorrect: number;

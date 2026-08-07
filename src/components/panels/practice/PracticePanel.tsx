@@ -41,6 +41,7 @@ import {
   buildFromTree,
   formatReviewInterval,
   getCardForReview,
+  getLinesFromTree,
   getNextReviewTimes,
   getStats,
   syncDeck,
@@ -269,6 +270,53 @@ function PracticePanel() {
     };
     setSessionStats((prev) => ({ ...prev, ...stats }));
     newPractice(stats);
+  }
+
+  function startLinesPractice() {
+    const orientation = headers.orientation || "white";
+    const start = headers.start || [];
+    
+    // Get all lines from the tree - for now just get the main line
+    const line: number[] = [];
+    let currentNode = root;
+    let currentPath: number[] = [...start];
+    
+    // Follow the main line (first child) to build the path
+    while (currentNode.children.length > 0) {
+      line.push(0);
+      currentNode = currentNode.children[0];
+      currentPath.push(0);
+    }
+    
+    if (line.length === 0) {
+      return;
+    }
+    
+    const stats: Partial<PracticeSessionStats> = {
+      mode: "lines",
+      remainingPositions: [],
+      correct: 0,
+      incorrect: 0,
+      streak: 0,
+      bestStreak: 0,
+    };
+    
+    setSessionStats((prev) => ({ ...prev, ...stats }));
+    
+    // Start from the beginning of the line
+    goToMove(start);
+    setPracticePath(start);
+    setInvisible(true);
+    setShowComments(false);
+    setEvalOpen(false);
+    setCardStartTime(Date.now());
+    
+    setPracticeState({
+      phase: "lines_waiting",
+      linePath: [...start],
+      lineTargetPath: start.concat(line),
+      lineOrientation: orientation,
+    });
   }
 
   function skipCard() {
@@ -516,6 +564,16 @@ function PracticePanel() {
                       }
                     >
                       {t("Board.Practice.PracticeFullRepertoire")}
+                    </Button>
+                    <Button
+                      size="md"
+                      variant="light"
+                      color="blue"
+                      fullWidth
+                      onClick={startLinesPractice}
+                      leftSection={<IconArrowRight size={20} />}
+                    >
+                      {t("Board.Practice.PracticeLines")}
                     </Button>
                   </Stack>
                 )}

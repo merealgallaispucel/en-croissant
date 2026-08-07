@@ -124,6 +124,7 @@ function Board({
   const clearShapes = useStore(store, (s) => s.clearShapes);
   const setShapes = useStore(store, (s) => s.setShapes);
   const setFen = useStore(store, (s) => s.setFen);
+  const setPracticePath = useStore(store, (s) => s.setPracticePath);
 
   const [pos, error] = positionFromFen(currentNode.fen);
   const [whiteFideOpen, setWhiteFideOpen] = useState(false);
@@ -170,14 +171,116 @@ function Board({
     }),
   );
 
+  const practiceState = useAtomValue(practiceStateAtom);
   const setPracticeState = useSetAtom(practiceStateAtom);
   const [sessionStats, setSessionStats] = useAtom(practiceSessionStatsAtom);
   const cardStartTime = useAtomValue(practiceCardStartTimeAtom);
+  const setInvisible = useSetAtom(currentInvisibleAtom);
+  const setShowComments = useSetAtom(currentShowCommentsAtom);
+  const setEvalOpen = useSetAtom(currentEvalOpenAtom);
 
   async function makeMove(move: NormalMove) {
     if (!pos) return;
     const san = makeSan(pos, move);
     if (practicing) {
+      // Handle lines mode
+      if (sessionStats.mode === "lines" && practiceState.phase === "lines_waiting") {
+        const linePath = practiceState.linePath || [];
+        const lineTargetPath = practiceState.lineTargetPath || [];
+        const lineOrientation = practiceState.lineOrientation || "white";
+        
+        // Check if the move is the next move in the line
+        const currentPosition = store.getState().position;
+        const expectedNextIndex = linePath.length; // Next index in the line
+        
+        if (expectedNextIndex < lineTargetPath.length) {
+          const expectedNextMoveIndex = lineTargetPath[expectedNextIndex];
+          const currentNode = getNodeAtPath(root, currentPosition);
+          
+          if (currentNode.children.length > expectedNextMoveIndex) {
+            const expectedMove = currentNode.children[expectedNextMoveIndex];
+            const expectedSan = expectedMove.san;
+            
+            if (san === expectedSan) {
+              // Correct move - play it
+              storeMakeMove({
+                payload: move,
+              });
+              setPendingMove(null);
+              
+              const newLinePath = [...linePath, expectedNextMoveIndex];
+              const newPosition = [...currentPosition, expectedNextMoveIndex];
+              
+              // Check if we need to play opponent's move automatically
+              if (newLinePath.length < lineTargetPath.length) {
+                const nextMoveIndex = lineTargetPath[newLinePath.length];
+                const nextNode = getNodeAtPath(root, newPosition);
+                
+                if (nextNode.children.length > nextMoveIndex) {
+                  const nextMoveNode = nextNode.children[nextMoveIndex];
+                  
+                  if (nextMoveNode && nextMoveNode.move) {
+                    // Play the opponent's move automatically after a short delay
+                    await new Promise((resolve) => setTimeout(resolve, 300));
+                    storeMakeMove({
+                      payload: nextMoveNode.move,
+                    });
+                    
+                    const opponentLinePath = [...newLinePath, nextMoveIndex];
+                    
+                    // Update practice state
+                    setPracticeState({
+                      phase: "lines_waiting",
+                      linePath: opponentLinePath,
+                      lineTargetPath: lineTargetPath,
+                      lineOrientation: lineOrientation,
+                    });
+                    
+                    // Update session stats
+                    setSessionStats((prev) => ({
+                      ...prev,
+                      correct: prev.correct + 1,
+                      streak: prev.streak + 1,
+                      bestStreak: Math.max(prev.bestStreak, prev.streak + 1),
+                    }));
+                  } else {
+                    // No more moves in the line
+                    endLinesPractice();
+                  }
+                } else {
+                  // No more moves in the line
+                  endLinesPractice();
+                }
+              } else {
+                // Reached the end of the line
+                endLinesPractice();
+              }
+            } else {
+              // Incorrect move
+              setPracticeState({
+                phase: "incorrect",
+                currentFen: currentNode.fen,
+                answer: expectedSan,
+                playedMove: san,
+              });
+              setSessionStats((prev) => ({
+                ...prev,
+                incorrect: prev.incorrect + 1,
+                streak: 0,
+              }));
+              notifications.show({
+                title: t("Common.Incorrect"),
+                message: t("Board.Practice.CorrectMoveWas", { move: expectedSan }),
+                color: "red",
+              });
+              await new Promise((resolve) => setTimeout(resolve, 500));
+            }
+          }
+        }
+        return;
+      }
+      
+      // Handle regular practice modes (anki, full)
       const c = deck.positions.find((c) => c.fen === currentNode.fen);
       if (!c) {
         return;

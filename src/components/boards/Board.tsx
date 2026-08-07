@@ -29,6 +29,7 @@ import {
   currentShowCommentsAtom,
   currentTabAtom,
   deckAtomFamily,
+  linesDeckAtomFamily,
   enableBoardScrollAtom,
   eraseDrawablesOnClickAtom,
   forcedEnPassantAtom,
@@ -50,11 +51,12 @@ import classes from "@/styles/Chessboard.module.css";
 import { ANNOTATION_INFO, isBasicAnnotation } from "@/utils/annotation";
 import { getVariationLine } from "@/utils/chess";
 import { chessopsError, forceEnPassant, positionFromFen } from "@/utils/chessops";
+import { findFen } from "@/utils/treeReducer";
 import { getTabFile, getTabGameNumber } from "@/utils/tabs";
 import ShowMaterial from "../common/ShowMaterial";
 import { TreeStateContext } from "../common/TreeStateContext";
 import FideInfo from "../databases/FideInfo";
-import { updateCardPerformance } from "../files/opening";
+import { Line, updateCardPerformance, updateLinePerformance } from "../files/opening";
 import { arrowColors } from "../panels/analysis/BestMoves";
 import AnnotationHint from "./AnnotationHint";
 import { BoardBar } from "./BoardBar";
@@ -118,8 +120,10 @@ function Board({
   );
 
   const goToNext = useStore(store, (s) => s.goToNext);
+  const goToMove = useStore(store, (s) => s.goToMove);
   const goToPrevious = useStore(store, (s) => s.goToPrevious);
   const storeMakeMove = useStore(store, (s) => s.makeMove);
+  const setPracticePath = useStore(store, (s) => s.setPracticePath);
   const setHeaders = useStore(store, (s) => s.setHeaders);
   const clearShapes = useStore(store, (s) => s.clearShapes);
   const setShapes = useStore(store, (s) => s.setShapes);
@@ -169,7 +173,15 @@ function Board({
       game: getTabGameNumber(currentTab),
     }),
   );
+  
+  const [linesDeck, setLinesDeck] = useAtom(
+    linesDeckAtomFamily({
+      file: tabFile?.path || "",
+      game: getTabGameNumber(currentTab),
+    }),
+  );
 
+  const practiceState = useAtomValue(practiceStateAtom);
   const setPracticeState = useSetAtom(practiceStateAtom);
   const [sessionStats, setSessionStats] = useAtom(practiceSessionStatsAtom);
   const cardStartTime = useAtomValue(practiceCardStartTimeAtom);
@@ -187,41 +199,152 @@ function Board({
       const timeTaken = Date.now() - cardStartTime;
 
       if (san !== c.answer) {
-        if (sessionStats.mode !== "full") {
-          updateCardPerformance(setDeck, i, c.card, 1);
+        // Handle lines mode
+        if (sessionStats.mode === "lines" && practiceState.lineIndex !== undefined) {
+          const line = linesDeck.lines[practiceState.lineIndex];
+          if (line) {
+            // In lines mode, when we make a mistake, we need to either:
+            // 1. Try another line if available
+            // 2. Restart the same line if no other lines available
+            
+            const remainingLines = sessionStats.remainingLines || [];
+            const otherLinesAvailable = linesDeck.lines.length > 1 && remainingLines.length > 1;
+            
+            if (otherLinesAvailable) {
+              // Move to next line
+              const nextRemainingLines = remainingLines.slice(1);
+              setSessionStats((prev) => ({
+                ...prev,
+                incorrect: prev.incorrect + 1,
+                streak: 0,
+                remainingLines: nextRemainingLines,
+              }));
+              
+              // Start the next line
+              if (nextRemainingLines.length > 0) {
+                const nextLine = linesDeck.lines[nextRemainingLines[0]];
+                goToMove(nextLine.startPath);
+                setPracticePath(nextLine.startPath);
+                setPracticeState({
+                  phase: "waiting",
+                  currentFen: nextLine.startFen,
+                  lineIndex: nextRemainingLines[0],
+                });
+              } else {
+                // No more lines, go back to idle
+                setPracticeState({ phase: "idle" });
+                setPracticePath(null);
+              }
+            } else {
+              // Restart the same line
+              goToMove(line.startPath);
+              setPracticePath(line.startPath);
+              setPracticeState({
+                phase: "waiting",
+                currentFen: line.startFen,
+                lineIndex: practiceState.lineIndex,
+              });
+            }
+            
+            notifications.show({
+              title: t("Common.Incorrect"),
+              message: t("Board.Practice.CorrectMoveWas", { move: c.answer }),
+              color: "red",
+            });
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
+        } else {
+          // Original logic for position-based modes
+          if (sessionStats.mode !== "full") {
+            updateCardPerformance(setDeck, i, c.card, 1);
+          }
+          setPracticeState({
+            phase: "incorrect",
+            currentFen: c.fen,
+            answer: c.answer,
+            playedMove: san,
+            positionIndex: i,
+            timeTaken,
+          });
+          setSessionStats((prev) => ({
+            ...prev,
+            incorrect: prev.incorrect + 1,
+            streak: 0,
+          }));
+          notifications.show({
+            title: t("Common.Incorrect"),
+            message: t("Board.Practice.CorrectMoveWas", { move: c.answer }),
+            color: "red",
+          });
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          goToNext();
         }
-        setPracticeState({
-          phase: "incorrect",
-          currentFen: c.fen,
-          answer: c.answer,
-          playedMove: san,
-          positionIndex: i,
-          timeTaken,
-        });
-        setSessionStats((prev) => ({
-          ...prev,
-          incorrect: prev.incorrect + 1,
-          streak: 0,
-        }));
-        notifications.show({
-          title: t("Common.Incorrect"),
-          message: t("Board.Practice.CorrectMoveWas", { move: c.answer }),
-          color: "red",
-        });
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        goToNext();
       } else {
-        storeMakeMove({
-          payload: move,
-        });
-        setPendingMove(null);
-        setPracticeState({
-          phase: "correct",
-          currentFen: c.fen,
-          answer: c.answer,
-          positionIndex: i,
-          timeTaken,
-        });
+        // Handle lines mode - check if this is the last move in the line
+        if (sessionStats.mode === "lines" && practiceState.lineIndex !== undefined) {
+          const line = linesDeck.lines[practiceState.lineIndex];
+          if (line) {
+            // Find the current position in the line
+            const currentPath = findFen(currentNode.fen, root);
+            const linePath = line.path;
+            
+            // Check if we've reached the end of the line
+            const isLastMoveInLine = currentPath && linePath && 
+                currentPath.length === linePath.length - 1 &&
+                currentPath.every((val: number, idx: number) => val === linePath[idx]);
+            
+            if (isLastMoveInLine) {
+              // This is the last move in the line - show rating buttons
+              storeMakeMove({
+                payload: move,
+              });
+              setPendingMove(null);
+              setPracticeState({
+                phase: "correct",
+                currentFen: currentNode.fen,
+                lineIndex: practiceState.lineIndex,
+                timeTaken,
+              });
+            } else {
+              // Continue with the line
+              storeMakeMove({
+                payload: move,
+              });
+              setPendingMove(null);
+              setPracticeState({
+                phase: "waiting",
+                currentFen: currentNode.fen,
+                lineIndex: practiceState.lineIndex,
+              });
+            }
+          } else {
+            // Fallback to original logic
+            storeMakeMove({
+              payload: move,
+            });
+            setPendingMove(null);
+            setPracticeState({
+              phase: "correct",
+              currentFen: c.fen,
+              answer: c.answer,
+              positionIndex: i,
+              timeTaken,
+            });
+          }
+        } else {
+          // Original logic for position-based modes
+          storeMakeMove({
+            payload: move,
+          });
+          setPendingMove(null);
+          setPracticeState({
+            phase: "correct",
+            currentFen: c.fen,
+            answer: c.answer,
+            positionIndex: i,
+            timeTaken,
+          });
+        }
       }
     } else {
       storeMakeMove({

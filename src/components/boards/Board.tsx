@@ -26,6 +26,7 @@ import {
   autoPromoteAtom,
   bestMovesFamily,
   currentEvalOpenAtom,
+  currentInvisibleAtom,
   currentShowCommentsAtom,
   currentTabAtom,
   deckAtomFamily,

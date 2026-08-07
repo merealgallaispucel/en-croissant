@@ -23,7 +23,6 @@ function AnnotationEditor() {
   const spellCheck = useAtomValue(spellCheckAtom);
   const editor = useEditor(
     {
-      autofocus: "end",
       extensions: [
         StarterKit.configure({
           link: {

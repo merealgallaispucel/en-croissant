@@ -3,7 +3,7 @@ import { type Card, createEmptyCard, fsrs, type Grade, generatorParameters } fro
 import { z } from "zod";
 import type { PracticeData } from "@/state/atoms";
 import { isPrefix } from "@/utils/misc";
-import { type TreeNode, treeIterator } from "@/utils/treeReducer";
+import { type TreeNode, treeIterator, getNodeAtPath } from "@/utils/treeReducer";
 
 const params = generatorParameters({ enable_fuzz: true });
 
@@ -167,4 +167,170 @@ export function formatReviewInterval(dueDate: Date): string {
     if (diffHrs < 24) return `${diffHrs}h`;
     if (diffDays < 30) return `${diffDays}d`;
     return `${Math.round(diffDays / 30)}mo`;
+}
+
+// Line-based practice types
+export type Line = {
+    id: string;
+    name: string;
+    startFen: string;
+    endFen: string;
+    path: number[];
+    startPath: number[];
+    moves: string[];
+    fullMoves: string[];
+    card: Card;
+};
+
+// Build lines from tree - each line is a complete path from start to a leaf for the player's color
+export function buildLinesFromTree(tree: TreeNode, color: "white" | "black", start: number[]): Line[] {
+    const lines: Line[] = [];
+    const startNode = getNodeAtPath(tree, start);
+    if (!startNode) return lines;
+    
+    // Find all leaf nodes
+    const iterator = treeIterator(tree);
+    
+    for (const item of iterator) {
+        if (item.node.children.length === 0 && !isPrefix(item.position, start)) {
+            // This is a leaf node, build a line from start to this leaf
+            const pathAfterStart = item.position.slice(start.length);
+            
+            // Build the line by walking from start through pathAfterStart
+            let node: TreeNode = startNode;
+            const movesForPlayer: string[] = [];
+            const allMoves: string[] = [];
+            let currentPath = [...start];
+            
+            for (const childIndex of pathAfterStart) {
+                if (node.children[childIndex]) {
+                    const child = node.children[childIndex];
+                    if (child.san) {
+                        allMoves.push(child.san);
+                        // Check if this move is for the player's color
+                        const isPlayerMove = (color === "white" && node.halfMoves % 2 === 0) || 
+                                           (color === "black" && node.halfMoves % 2 === 1);
+                        if (isPlayerMove) {
+                            movesForPlayer.push(child.san);
+                        }
+                    }
+                    node = child;
+                    currentPath = [...currentPath, childIndex];
+                }
+            }
+            
+            // Only add this line if it has at least one move for the player
+            if (movesForPlayer.length > 0) {
+                const lineId = currentPath.join(",");
+                const lineName = allMoves.join(" ");
+                
+                lines.push({
+                    id: lineId,
+                    name: lineName,
+                    startFen: startNode.fen,
+                    endFen: node.fen,
+                    path: currentPath,
+                    startPath: start,
+                    moves: movesForPlayer,
+                    fullMoves: allMoves,
+                    card: createEmptyCard(),
+                });
+            }
+        }
+    }
+    
+    return lines;
+}
+
+// Stats for lines
+export type LineStats = {
+    unseen: number;
+    due: number;
+    practiced: number;
+    nextDue: Date | null;
+    total: number;
+};
+
+export function getLineStats(lines: Line[]): LineStats {
+    const stats: LineStats = {
+        unseen: 0,
+        due: 0,
+        practiced: 0,
+        nextDue: null,
+        total: lines.length,
+    };
+    const now = new Date();
+    for (const line of lines) {
+        const dueDate = new Date(line.card.due);
+        if (line.card.reps === 0) {
+            stats.unseen++;
+        } else if (dueDate <= now) {
+            stats.due++;
+        } else {
+            stats.practiced++;
+            if (!stats.nextDue || dueDate < stats.nextDue) {
+                stats.nextDue = dueDate;
+            }
+        }
+    }
+    return stats;
+}
+
+// Get a line for review based on SRS
+export function getLineForReview(lines: Line[]): Line | null {
+    const now = new Date();
+    const filtered = lines.filter((line) => new Date(line.card.due) <= now);
+    return filtered.length > 0 ? filtered[0] : null;
+}
+
+// Update line performance in the deck
+export function updateLinePerformance(
+    setLines: React.Dispatch<SetStateAction<{ lines: Line[]; logs: any[] }>>,
+    lineIndex: number,
+    card: Card,
+    grade: 1 | 2 | 3 | 4,
+) {
+    const schedulingCards = f.repeat(card, new Date());
+    const { card: newCard, log } = schedulingCards[grade];
+
+    setLines((data) => {
+        data.lines[lineIndex].card = newCard;
+        data.logs.push({ ...log, lineId: data.lines[lineIndex].id });
+        return {
+            lines: data.lines,
+            logs: data.logs,
+        };
+    });
+}
+
+// Sync lines with tree changes
+export function syncLinesDeck(
+    existing: Line[],
+    tree: TreeNode,
+    color: "white" | "black",
+    start: number[],
+): { lines: Line[]; added: number; removed: number } {
+    const freshLines = buildLinesFromTree(tree, color, start);
+
+    const existingById = new Map<string, Line>();
+    for (const line of existing) {
+        existingById.set(line.id, line);
+    }
+
+    let added = 0;
+    const merged: Line[] = [];
+    for (const line of freshLines) {
+        const prev = existingById.get(line.id);
+        if (prev) {
+            merged.push({ ...prev, moves: line.moves, fullMoves: line.fullMoves, endFen: line.endFen, path: line.path });
+        } else {
+            merged.push(line);
+            added++;
+        }
+    }
+
+    const freshIds = new Set(freshLines.map((l) => l.id));
+    const removed = existing.filter((l) => !freshIds.has(l.id)).length;
+
+    return { lines: merged, added, removed };
 }

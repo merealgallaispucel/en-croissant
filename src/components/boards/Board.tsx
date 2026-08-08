@@ -182,7 +182,9 @@ function Board({
   async function makeMove(move: NormalMove) {
     if (!pos) return;
     const san = makeSan(pos, move);
-    if (practicing) {
+    const isPracticing = practicing || sessionStats.mode === "lines";
+    
+    if (isPracticing) {
       // Handle lines mode
       if (sessionStats.mode === "lines" && practiceState.phase === "lines_waiting") {
         const linePath = practiceState.linePath || [];
@@ -440,7 +442,8 @@ function Board({
     !!headers.white_time_control ||
     !!headers.black_time_control;
 
-  const practiceLock = !!practicing && sessionStats.mode !== "lines" && !deck.positions.find((c) => c.fen === currentNode.fen);
+  const isPracticing = practicing || sessionStats.mode === "lines";
+  const practiceLock = isPracticing && sessionStats.mode !== "lines" && !deck.positions.find((c) => c.fen === currentNode.fen);
 
   const movableColor: "white" | "black" | "both" | undefined = useMemo(() => {
     return practiceLock

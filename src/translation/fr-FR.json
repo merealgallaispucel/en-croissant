@@ -151,6 +151,7 @@
     "Board.Practice.LinesMode": "Ligne",
     "Board.Practice.YourTurn": "À toi de jouer ({{color}})",
     "Board.Practice.NoMovesInLine": "Aucun coup dans cette ligne",
+    "Board.Practice.WillAutoPlayFirstMove": "Le premier coup sera joué automatiquement pour commencer votre tour",
     "Board.Practice.Progress": "Progression",
     "Board.Practice.Rating": "Classement",
     "Board.Practice.Reset.Description": "Êtes-vous sûr de vouloir réinitialiser les données d'ouverture pour « {{name}} » ? Toute la progression de l'apprentissage sera perdue.",

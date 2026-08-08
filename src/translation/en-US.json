@@ -151,6 +151,7 @@
     "Board.Practice.LinesMode": "Line",
     "Board.Practice.YourTurn": "Your turn ({{color}})",
     "Board.Practice.NoMovesInLine": "No moves in this line",
+    "Board.Practice.WillAutoPlayFirstMove": "First move will be auto-played to start your turn",
     "Board.Practice.Progress": "Progress",
     "Board.Practice.Rating": "Rating",
     "Board.Practice.Reset.Description": "Are you sure you want to reset the opening data for \"{{name}}\"? All the learning progress will be lost.",

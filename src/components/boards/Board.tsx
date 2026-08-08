@@ -15,7 +15,7 @@ import { chessgroundDests, chessgroundMove } from "chessops/compat";
 import { makeFen, parseFen } from "chessops/fen";
 import { makeSan } from "chessops/san";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { memo, useCallback, useContext, useMemo, useState } from "react";
+import { memo, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { useTranslation } from "react-i18next";
 import { match } from "ts-pattern";
@@ -26,7 +26,6 @@ import {
   autoPromoteAtom,
   bestMovesFamily,
   currentEvalOpenAtom,
-  currentInvisibleAtom,
   currentShowCommentsAtom,
   currentTabAtom,
   deckAtomFamily,
@@ -52,6 +51,7 @@ import { ANNOTATION_INFO, isBasicAnnotation } from "@/utils/annotation";
 import { getVariationLine } from "@/utils/chess";
 import { chessopsError, forceEnPassant, positionFromFen } from "@/utils/chessops";
 import { getTabFile, getTabGameNumber } from "@/utils/tabs";
+import { getNodeAtPath } from "@/utils/treeReducer";
 import ShowMaterial from "../common/ShowMaterial";
 import { TreeStateContext } from "../common/TreeStateContext";
 import FideInfo from "../databases/FideInfo";
@@ -125,7 +125,6 @@ function Board({
   const clearShapes = useStore(store, (s) => s.clearShapes);
   const setShapes = useStore(store, (s) => s.setShapes);
   const setFen = useStore(store, (s) => s.setFen);
-  const setPracticePath = useStore(store, (s) => s.setPracticePath);
 
   const [pos, error] = positionFromFen(currentNode.fen);
   const [whiteFideOpen, setWhiteFideOpen] = useState(false);
@@ -176,128 +175,144 @@ function Board({
   const setPracticeState = useSetAtom(practiceStateAtom);
   const [sessionStats, setSessionStats] = useAtom(practiceSessionStatsAtom);
   const cardStartTime = useAtomValue(practiceCardStartTimeAtom);
-  const setInvisible = useSetAtom(currentInvisibleAtom);
-  const setShowComments = useSetAtom(currentShowCommentsAtom);
+
+  const treePosition = useStore(store, (s) => s.position);
+
+  // Called whenever the current line is fully played: stop drilling and ask the
+  // user to rate the line (Again/Hard/Good/Easy) before moving to the next one.
+  const requestLineRating = useCallback(() => {
+    setPracticeState((p) => ({
+      ...p,
+      phase: "lines_rating",
+      feedback: "correct",
+    }));
+  }, [setPracticeState]);
+
+  // In lines mode, auto-play the opponent's moves so the user only has to play
+  // the moves belonging to their orientation. This handles both the initial
+  // position (when the opponent moves first) and the transition after a correct
+  // move by the user. It also asks for a rating when one is finished, and (after
+  // an error) auto-plays the correct move to keep the flow going.
+  useEffect(() => {
+    if (sessionStats.mode !== "lines" || practiceState.phase !== "lines_waiting") return;
+
+    const lineTargetPath = practiceState.lineTargetPath || [];
+
+    if (treePosition.length >= lineTargetPath.length) {
+      requestLineRating();
+      return;
+    }
+
+    const childIndex = lineTargetPath[treePosition.length];
+    const node = store.getState().currentNode();
+    const expected = node.children[childIndex];
+    const [posAtNode] = positionFromFen(node.fen);
+    if (!posAtNode) return;
+
+    // It's the user's turn.
+    if (posAtNode.turn === practiceState.lineOrientation) {
+      // After an error, auto-play the correct move and clear the flag so the
+      // user isn't stuck re-entering it.
+      if (practiceState.autoAdvance) {
+        if (!expected?.move) {
+          requestLineRating();
+          return;
+        }
+        const timer = setTimeout(() => {
+          setPracticeState((p) => ({ ...p, autoAdvance: false, showSolution: false }));
+          storeMakeMove({ payload: expected.move as NormalMove });
+        }, 400);
+        return () => clearTimeout(timer);
+      }
+      return; // Wait for the user's move.
+    }
+
+    // Opponent's turn: auto-play the expected move.
+    if (!expected?.move) {
+      requestLineRating();
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      storeMakeMove({ payload: expected.move as NormalMove });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [
+    sessionStats.mode,
+    practiceState.phase,
+    practiceState.lineTargetPath,
+    practiceState.lineOrientation,
+    practiceState.autoAdvance,
+    treePosition,
+    store,
+    requestLineRating,
+    storeMakeMove,
+    setPracticeState,
+  ]);
 
   async function makeMove(move: NormalMove) {
     if (!pos) return;
     const san = makeSan(pos, move);
-    const isPracticing = practicing || sessionStats.mode === "lines";
-    
-    if (isPracticing) {
-      // Handle lines mode
-      if (sessionStats.mode === "lines" && practiceState.phase === "lines_waiting") {
-        const linePath = practiceState.linePath || [];
-        const lineTargetPath = practiceState.lineTargetPath || [];
-        const lineOrientation = practiceState.lineOrientation || "white";
-        
-        // Check if the move is the next move in the line
-        const currentPosition = store.getState().position;
-        const expectedNextIndex = linePath.length; // Next index in the line
-        
-        if (expectedNextIndex < lineTargetPath.length) {
-          const expectedNextMoveIndex = lineTargetPath[expectedNextIndex];
-          const currentNode = getNodeAtPath(root, currentPosition);
-          
-          if (currentNode.children.length > expectedNextMoveIndex) {
-            const expectedMove = currentNode.children[expectedNextMoveIndex];
-            const expectedSan = expectedMove.san;
-            
-            if (san === expectedSan) {
-              // Correct move - play it
-              storeMakeMove({
-                payload: move,
-              });
-              setPendingMove(null);
-              
-              const newLinePath = [...linePath, expectedNextMoveIndex];
-              const newPosition = [...currentPosition, expectedNextMoveIndex];
-              
-              // Update session stats
-              setSessionStats((prev) => ({
-                ...prev,
-                correct: prev.correct + 1,
-                streak: prev.streak + 1,
-                bestStreak: Math.max(prev.bestStreak, prev.streak + 1),
-              }));
-              
-              // Show positive feedback
-              notifications.show({
-                title: t("Board.Practice.Correct"),
-                message: t("Common.Correct"),
-                color: "green",
-              });
-              
-              // Check if we need to play opponent's move automatically
-              // Only play opponent move if it's their turn (not our orientation)
-              if (newLinePath.length < lineTargetPath.length) {
-                const nextMoveIndex = lineTargetPath[newLinePath.length];
-                const nextNode = getNodeAtPath(root, newPosition);
-                
-                if (nextNode.children.length > nextMoveIndex) {
-                  const nextMoveNode = nextNode.children[nextMoveIndex];
-                  const nextPos = positionFromFen(nextNode.fen);
-                  
-                  // Check if it's opponent's turn (not our orientation)
-                  if (nextPos && nextPos.turn !== lineOrientation) {
-                    // Play the opponent's move automatically after a short delay
-                    await new Promise((resolve) => setTimeout(resolve, 300));
-                    storeMakeMove({
-                      payload: nextMoveNode.move,
-                    });
-                    
-                    const opponentLinePath = [...newLinePath, nextMoveIndex];
-                    
-                    // Update practice state
-                    setPracticeState({
-                      phase: "lines_waiting",
-                      linePath: opponentLinePath,
-                      lineTargetPath: lineTargetPath,
-                      lineOrientation: lineOrientation,
-                    });
-                  } else {
-                    // It's our turn again, wait for user input
-                    setPracticeState({
-                      phase: "lines_waiting",
-                      linePath: newLinePath,
-                      lineTargetPath: lineTargetPath,
-                      lineOrientation: lineOrientation,
-                    });
-                  }
-                } else {
-                  // No more moves in the line
-                  endLinesPractice();
-                }
-              } else {
-                // Reached the end of the line
-                endLinesPractice();
-              }
-            } else {
-              // Incorrect move
-              setPracticeState({
-                phase: "incorrect",
-                currentFen: currentNode.fen,
-                answer: expectedSan,
-                playedMove: san,
-              });
-              setSessionStats((prev) => ({
-                ...prev,
-                incorrect: prev.incorrect + 1,
-                streak: 0,
-              }));
-              notifications.show({
-                title: t("Common.Incorrect"),
-                message: t("Board.Practice.CorrectMoveWas", { move: expectedSan }),
-                color: "red",
-              });
-              await new Promise((resolve) => setTimeout(resolve, 500));
-            }
-          }
-        }
+
+    // Lines mode is handled independently and never falls back to regular practice.
+    if (sessionStats.mode === "lines") {
+      if (practiceState.phase !== "lines_waiting") {
+        return; // Ignore board moves while feedback (incorrect, etc.) is shown.
+      }
+      const lineTargetPath = practiceState.lineTargetPath || [];
+      const currentPosition = store.getState().position;
+
+      // Should not happen (the effect requests a rating), but guard.
+      if (currentPosition.length >= lineTargetPath.length) {
+        requestLineRating();
         return;
       }
-      
-      // Handle regular practice modes (anki, full)
+
+      const childIndex = lineTargetPath[currentPosition.length];
+      const node = getNodeAtPath(root, currentPosition);
+      const expected = node.children[childIndex];
+      if (!expected || !expected.san) {
+        requestLineRating();
+        return;
+      }
+
+      if (san !== expected.san) {
+        // Incorrect move: don't give the solution away and don't notify. Keep the
+        // board interactive so the user can retry, and signal the mistake in the
+        // panel (with a "Show solution" / "Next" option).
+        const expectedSan = expected.san;
+        setPracticeState((p) => ({
+          ...p,
+          phase: "lines_waiting",
+          answer: expectedSan,
+          feedback: "incorrect",
+          showSolution: false,
+        }));
+        setSessionStats((prev) => ({
+          ...prev,
+          incorrect: prev.incorrect + 1,
+          streak: 0,
+        }));
+        return;
+      }
+
+      // Correct move - play it. The effect above handles the opponent's reply
+      // and the end of the line (which requests a rating) automatically. The
+      // feedback is shown in the panel instead of a notification.
+      storeMakeMove({ payload: move });
+      setPendingMove(null);
+      setPracticeState((p) => ({ ...p, feedback: "correct", showSolution: false }));
+      setSessionStats((prev) => ({
+        ...prev,
+        correct: prev.correct + 1,
+        streak: prev.streak + 1,
+        bestStreak: Math.max(prev.bestStreak, prev.streak + 1),
+      }));
+      return;
+    }
+
+    // Handle regular practice modes (anki, full)
+    if (practicing) {
       const c = deck.positions.find((c) => c.fen === currentNode.fen);
       if (!c) {
         return;
@@ -443,7 +458,10 @@ function Board({
     !!headers.black_time_control;
 
   const isPracticing = practicing || sessionStats.mode === "lines";
-  const practiceLock = isPracticing && sessionStats.mode !== "lines" && !deck.positions.find((c) => c.fen === currentNode.fen);
+  const practiceLock =
+    isPracticing &&
+    sessionStats.mode !== "lines" &&
+    !deck.positions.find((c) => c.fen === currentNode.fen);
 
   const movableColor: "white" | "black" | "both" | undefined = useMemo(() => {
     return practiceLock

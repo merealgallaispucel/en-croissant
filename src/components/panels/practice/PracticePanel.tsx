@@ -16,11 +16,13 @@ import {
   ThemeIcon,
   Tooltip,
 } from "@mantine/core";
+import { notifications } from "@mantine/notifications";
 import { useToggle } from "@mantine/hooks";
 import {
   IconArrowBack,
   IconArrowRight,
   IconBook,
+  IconBulb,
   IconCheck,
   IconFlame,
   IconInfoCircle,
@@ -29,7 +31,7 @@ import {
 } from "@tabler/icons-react";
 import dayjs from "dayjs";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { useTranslation } from "react-i18next";
 import { formatDate } from "ts-fsrs";
@@ -39,13 +41,18 @@ import ConfirmModal from "@/components/common/ConfirmModal";
 import { TreeStateContext } from "@/components/common/TreeStateContext";
 import {
   buildFromTree,
+  buildLinesFromTree,
   formatReviewInterval,
   getCardForReview,
-  getLinesFromTree,
+  getLineForReview,
+  getLineStats,
   getNextReviewTimes,
   getStats,
+  scheduleLineCard,
   syncDeck,
+  syncLinesDeck,
   updateCardPerformance,
+  updateLinePerformance,
 } from "@/components/files/opening";
 import {
   currentEvalOpenAtom,
@@ -56,10 +63,12 @@ import {
   deckAtomFamily,
   type PracticeData,
   type PracticeSessionStats,
+  lineDeckAtomFamily,
   practiceCardStartTimeAtom,
   practiceSessionStatsAtom,
   practiceStateAtom,
   practiceAutoDifficultyAtom,
+  practiceModesVisibleAtom,
 } from "@/state/atoms";
 import { getTabFile, getTabGameNumber } from "@/utils/tabs";
 import { findFen, getNodeAtPath } from "@/utils/treeReducer";
@@ -74,6 +83,7 @@ function PracticePanel() {
   const goToMove = useStore(store, (s) => s.goToMove);
   const setPracticePath = useStore(store, (s) => s.setPracticePath);
   const currentFen = useStore(store, (s) => s.currentNode().fen);
+  const treePosition = useStore(store, (s) => s.position);
 
   const currentTab = useAtomValue(currentTabAtom);
   const tabFile = getTabFile(currentTab);
@@ -100,12 +110,9 @@ function PracticePanel() {
 
     const orientation = headers.orientation || "white";
     const start = headers.start || [];
-    
-    
-    
+
     // Ensure start is an array
     if (!Array.isArray(start)) {
-      
       return;
     }
 
@@ -131,7 +138,41 @@ function PracticePanel() {
     lastSyncedTreeRef.current = treeFingerprint;
   }, [root, headers, setDeck]);
 
+  // Line deck (FSRS cards keyed by variation) — synced with the tree the same
+  // way the move deck is. Only built when the file is a repertoire.
+  const [lineDeck, setLineDeck] = useAtom(
+    lineDeckAtomFamily({
+      file: tabFile?.path || "",
+      game: getTabGameNumber(currentTab),
+    }),
+  );
+  const lineDeckPositionsRef = useRef(lineDeck.lines);
+  lineDeckPositionsRef.current = lineDeck.lines;
+  const lastSyncedLinesRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const treeFingerprint = JSON.stringify(root);
+    if (lastSyncedLinesRef.current === treeFingerprint) return;
+
+    const start = headers.start || [];
+    if (!Array.isArray(start)) return;
+
+    if (lineDeckPositionsRef.current.length === 0) {
+      const newLines = buildLinesFromTree(root, start);
+      if (newLines.length > 0) {
+        setLineDeck({ lines: newLines, logs: [] });
+      }
+    } else {
+      const { lines, added, removed } = syncLinesDeck(lineDeckPositionsRef.current, root, start);
+      if (added > 0 || removed > 0) {
+        setLineDeck((prev) => ({ ...prev, lines }));
+      }
+    }
+    lastSyncedLinesRef.current = treeFingerprint;
+  }, [root, headers, setLineDeck]);
+
   const stats = getStats(deck.positions);
+  const lineStats = getLineStats(lineDeck.lines);
 
   const setInvisible = useSetAtom(currentInvisibleAtom);
   const setShowComments = useSetAtom(currentShowCommentsAtom);
@@ -140,6 +181,40 @@ function PracticePanel() {
   const [sessionStats, setSessionStats] = useAtom(practiceSessionStatsAtom);
   const setCardStartTime = useSetAtom(practiceCardStartTimeAtom);
   const practiceAutoDifficulty = useAtomValue(practiceAutoDifficultyAtom);
+  const practiceModesVisible = useAtomValue(practiceModesVisibleAtom);
+
+  // Current correct move for the line being drilled, used by "Show solution".
+  const currentLineAnswer = useMemo(() => {
+    const lineTarget = practiceState.lineTargetPath || [];
+    if (treePosition.length >= lineTarget.length) return null;
+    const childIndex = lineTarget[treePosition.length];
+    const node = getNodeAtPath(root, treePosition);
+    return node.children[childIndex]?.san ?? null;
+  }, [practiceState.lineTargetPath, treePosition, root]);
+
+  // Number of moves the user still has to play in the current line (only their
+  // own color, not the opponent's auto-played moves).
+  const userMovesLeft = useMemo(() => {
+    const lineTarget = practiceState.lineTargetPath || [];
+    const orientation = practiceState.lineOrientation || "white";
+    const startLen = headers.start?.length ?? 0;
+    let total = 0;
+    let done = 0;
+    for (let i = startLen; i < lineTarget.length; i++) {
+      const node = getNodeAtPath(root, lineTarget.slice(0, i));
+      const isUserTurn = node.halfMoves % 2 === (orientation === "white" ? 0 : 1);
+      if (!isUserTurn) continue;
+      total++;
+      if (i < treePosition.length) done++;
+    }
+    return Math.max(0, total - done);
+  }, [
+    practiceState.lineTargetPath,
+    practiceState.lineOrientation,
+    root,
+    headers.start,
+    treePosition,
+  ]);
 
   const newPractice = useCallback(
     (stats?: Partial<PracticeSessionStats>) => {
@@ -283,54 +358,92 @@ function PracticePanel() {
   function startLinesPractice() {
     const orientation = headers.orientation || "white";
     const start = headers.start || [];
-    
-    
-    
-    // Ensure start is an array
+
     if (!Array.isArray(start)) {
-      
       return;
     }
-    
-    // Build the main line path from the start position
-    const line: number[] = [];
-    let currentNode = getNodeAtPath(root, start);
-    
-    // Follow the main line (first child) to build the path
-    while (currentNode && currentNode.children.length > 0) {
-      line.push(0);
-      currentNode = currentNode.children[0];
+
+    // Make sure the line deck exists (it is normally built/synced on tree change).
+    let cards = lineDeck.lines;
+    if (cards.length === 0) {
+      const built = buildLinesFromTree(root, start);
+      if (built.length === 0) {
+        notifications.show({
+          title: t("Board.Practice.NoMovesInLine"),
+          message: t("Board.Practice.NoMovesInLine"),
+          color: "yellow",
+        });
+        return;
+      }
+      setLineDeck({ lines: built, logs: [] });
+      cards = built;
     }
-    
-    if (line.length === 0) {
-      // No moves in the line, cannot practice
+
+    const review = getLineForReview(cards);
+    if (!review) {
+      notifications.show({
+        title: t("Board.Practice.LinesAllPracticed"),
+        message: t("Board.Practice.LinesAllPracticed"),
+        color: "green",
+      });
       return;
     }
-    
-    const stats: Partial<PracticeSessionStats> = {
+
+    setSessionStats((prev) => ({
+      ...prev,
       mode: "lines",
       remainingPositions: [],
       correct: 0,
       incorrect: 0,
       streak: 0,
       bestStreak: 0,
-    };
-    
-    setSessionStats((prev) => ({ ...prev, ...stats }));
-    // Start from the start position
+      linesCompleted: 0,
+    }));
+
+    beginLine(review.index, review.line.path, orientation, cards);
+  }
+
+  function stopLinesPractice() {
+    setPracticeState({ phase: "idle" });
+    setPracticePath(null);
+    setInvisible(false);
+    setShowComments(true);
+    setEvalOpen(true);
+    setSessionStats({
+      mode: "anki",
+      remainingPositions: [],
+      correct: 0,
+      incorrect: 0,
+      streak: 0,
+      bestStreak: 0,
+      linesCompleted: 0,
+    });
+  }
+
+  // Move the drill to the given deck line (index + path), starting from the
+  // repository start position. The board effect auto-plays opponent moves.
+  function beginLine(
+    index: number,
+    path: number[],
+    lineOrientation: "white" | "black" = headers.orientation || "white",
+    cards: typeof lineDeck.lines = lineDeck.lines,
+    feedback?: "correct",
+  ) {
+    const start = headers.start || [];
     goToMove(start);
     setPracticePath(start);
+    setPracticeState({
+      phase: "lines_waiting",
+      lineTargetPath: path,
+      lineOrientation,
+      lines: cards.map((c) => c.path),
+      lineIndex: index,
+      feedback,
+    });
     setInvisible(true);
     setShowComments(false);
     setEvalOpen(false);
     setCardStartTime(Date.now());
-    
-    setPracticeState({
-      phase: "lines_waiting",
-      linePath: [...start],
-      lineTargetPath: start.concat(line),
-      lineOrientation: orientation,
-    });
   }
 
   function skipCard() {
@@ -338,9 +451,74 @@ function PracticePanel() {
       const remainingPositions = sessionStats.remainingPositions.slice(1);
       setSessionStats((prev) => ({ ...prev, remainingPositions }));
       newPractice({ remainingPositions });
+    } else if (sessionStats.mode === "lines") {
+      // After an error, continue by auto-playing the correct move so the flow
+      // keeps going instead of stopping on the board.
+      setPracticeState({
+        phase: "lines_waiting",
+        lineTargetPath: practiceState.lineTargetPath,
+        lineOrientation: practiceState.lineOrientation,
+        lines: practiceState.lines,
+        lineIndex: practiceState.lineIndex,
+        autoAdvance: true,
+      });
+      setInvisible(true);
     } else {
       newPractice();
     }
+  }
+
+  // Called when the user rates a finished line (Again/Hard/Good/Easy): schedules
+  // the line card via FSRS (like the classic move practice) and moves on to the
+  // next line due for review, or ends the session when nothing is left to do.
+  function rateLine(grade: 1 | 2 | 3 | 4) {
+    const deckIndex = practiceState.lineIndex;
+    if (deckIndex == null || deckIndex < 0 || deckIndex >= lineDeck.lines.length) {
+      stopLinesPractice();
+      return;
+    }
+
+    const card = lineDeck.lines[deckIndex].card;
+    if (!card) {
+      stopLinesPractice();
+      return;
+    }
+
+    const nextCard = scheduleLineCard(card, grade);
+    updateLinePerformance(setLineDeck, deckIndex, card, grade);
+    setSessionStats((prev) => ({ ...prev, linesCompleted: prev.linesCompleted + 1 }));
+
+    // Determine the next line due considering the just-rated card.
+    const updated = lineDeck.lines.map((l, i) => (i === deckIndex ? { ...l, card: nextCard } : l));
+    const next = getLineForReview(updated);
+
+    if (next) {
+      beginLine(next.index, next.line.path);
+    } else {
+      stopLinesPractice();
+    }
+  }
+
+  // Reveal the correct move so the user can study it. Works both after an
+  // incorrect move and when the user is simply stuck on the current position.
+  function revealSolution() {
+    setPracticeState((p) => ({
+      ...p,
+      showSolution: true,
+      answer: p.answer ?? currentLineAnswer ?? undefined,
+    }));
+  }
+
+  // After an error (or having seen the solution), play the correct move and
+  // continue with the line.
+  function advanceLine() {
+    setPracticeState((p) => ({
+      ...p,
+      autoAdvance: true,
+      showSolution: false,
+      feedback: undefined,
+    }));
+    setInvisible(true);
   }
 
   useHotkeys("1", () => handleQualityRating(1), {
@@ -354,6 +532,18 @@ function PracticePanel() {
   });
   useHotkeys("4", () => handleQualityRating(4), {
     enabled: practiceState.phase === "correct",
+  });
+  useHotkeys("1", () => rateLine(1), {
+    enabled: practiceState.phase === "lines_rating",
+  });
+  useHotkeys("2", () => rateLine(2), {
+    enabled: practiceState.phase === "lines_rating",
+  });
+  useHotkeys("3", () => rateLine(3), {
+    enabled: practiceState.phase === "lines_rating",
+  });
+  useHotkeys("4", () => rateLine(4), {
+    enabled: practiceState.phase === "lines_rating",
   });
   useHotkeys("space", () => skipCard(), {
     enabled: practiceState.phase === "incorrect",
@@ -413,57 +603,67 @@ function PracticePanel() {
             )}
             {stats.total > 0 && (
               <>
-                <Stack gap={4}>
-                  <Group justify="space-between">
-                    <Text fz="xs" fw={500}>
-                      {t("Board.Practice.Progress")}
-                    </Text>
-                    <Text fz="xs" c="dimmed">
-                      {Math.round((stats.practiced / stats.total) * 100)}%
-                    </Text>
-                  </Group>
-                  <Progress.Root size="sm">
-                    <Tooltip label={`${t("Board.Practice.Practiced")}: ${stats.practiced}`}>
-                      <Progress.Section
-                        value={(stats.practiced / stats.total) * 100}
-                        color="blue"
-                      />
-                    </Tooltip>
-                    <Tooltip label={`${t("Board.Practice.Due")}: ${stats.due}`}>
-                      <Progress.Section value={(stats.due / stats.total) * 100} color="yellow" />
-                    </Tooltip>
-                    <Tooltip label={`${t("Board.Practice.Unseen")}: ${stats.unseen}`}>
-                      <Progress.Section value={(stats.unseen / stats.total) * 100} color="gray" />
-                    </Tooltip>
-                  </Progress.Root>
-                </Stack>
+                {(practiceModesVisible.anki || practiceModesVisible.full) && (
+                  <>
+                    <Stack gap={4}>
+                      <Group justify="space-between">
+                        <Text fz="xs" fw={500}>
+                          {t("Board.Practice.Progress")}
+                        </Text>
+                        <Text fz="xs" c="dimmed">
+                          {Math.round((stats.practiced / stats.total) * 100)}%
+                        </Text>
+                      </Group>
+                      <Progress.Root size="sm">
+                        <Tooltip label={`${t("Board.Practice.Practiced")}: ${stats.practiced}`}>
+                          <Progress.Section
+                            value={(stats.practiced / stats.total) * 100}
+                            color="blue"
+                          />
+                        </Tooltip>
+                        <Tooltip label={`${t("Board.Practice.Due")}: ${stats.due}`}>
+                          <Progress.Section
+                            value={(stats.due / stats.total) * 100}
+                            color="yellow"
+                          />
+                        </Tooltip>
+                        <Tooltip label={`${t("Board.Practice.Unseen")}: ${stats.unseen}`}>
+                          <Progress.Section
+                            value={(stats.unseen / stats.total) * 100}
+                            color="gray"
+                          />
+                        </Tooltip>
+                      </Progress.Root>
+                    </Stack>
 
-                <SimpleGrid cols={3} spacing="xs">
-                  <Paper p="xs" withBorder radius="sm">
-                    <Text fz={10} tt="uppercase" c="dimmed" fw={600}>
-                      {t("Board.Practice.Practiced")}
-                    </Text>
-                    <Text fz="lg" fw={700} c="blue">
-                      {stats.practiced}
-                    </Text>
-                  </Paper>
-                  <Paper p="xs" withBorder radius="sm">
-                    <Text fz={10} tt="uppercase" c="dimmed" fw={600}>
-                      {t("Board.Practice.Due")}
-                    </Text>
-                    <Text fz="lg" fw={700} c="yellow">
-                      {stats.due}
-                    </Text>
-                  </Paper>
-                  <Paper p="xs" withBorder radius="sm">
-                    <Text fz={10} tt="uppercase" c="dimmed" fw={600}>
-                      {t("Board.Practice.Unseen")}
-                    </Text>
-                    <Text fz="lg" fw={700} c="dimmed">
-                      {stats.unseen}
-                    </Text>
-                  </Paper>
-                </SimpleGrid>
+                    <SimpleGrid cols={3} spacing="xs">
+                      <Paper p="xs" withBorder radius="sm">
+                        <Text fz={10} tt="uppercase" c="dimmed" fw={600}>
+                          {t("Board.Practice.Practiced")}
+                        </Text>
+                        <Text fz="lg" fw={700} c="blue">
+                          {stats.practiced}
+                        </Text>
+                      </Paper>
+                      <Paper p="xs" withBorder radius="sm">
+                        <Text fz={10} tt="uppercase" c="dimmed" fw={600}>
+                          {t("Board.Practice.Due")}
+                        </Text>
+                        <Text fz="lg" fw={700} c="yellow">
+                          {stats.due}
+                        </Text>
+                      </Paper>
+                      <Paper p="xs" withBorder radius="sm">
+                        <Text fz={10} tt="uppercase" c="dimmed" fw={600}>
+                          {t("Board.Practice.Unseen")}
+                        </Text>
+                        <Text fz="lg" fw={700} c="dimmed">
+                          {stats.unseen}
+                        </Text>
+                      </Paper>
+                    </SimpleGrid>
+                  </>
+                )}
 
                 {(practiceState.phase !== "idle" ||
                   sessionStats.correct > 0 ||
@@ -529,24 +729,88 @@ function PracticePanel() {
                   </SimpleGrid>
                 )}
 
+                {lineStats.total > 0 && practiceModesVisible.lines && (
+                  <>
+                    <Stack gap={4}>
+                      <Group justify="space-between">
+                        <Text fz="xs" fw={500}>
+                          {t("Board.Practice.LinesProgress")}
+                        </Text>
+                        <Text fz="xs" c="dimmed">
+                          {Math.round((lineStats.practiced / lineStats.total) * 100)}%
+                        </Text>
+                      </Group>
+                      <Progress.Root size="sm">
+                        <Tooltip label={`${t("Board.Practice.Practiced")}: ${lineStats.practiced}`}>
+                          <Progress.Section
+                            value={(lineStats.practiced / lineStats.total) * 100}
+                            color="blue"
+                          />
+                        </Tooltip>
+                        <Tooltip label={`${t("Board.Practice.Due")}: ${lineStats.due}`}>
+                          <Progress.Section
+                            value={(lineStats.due / lineStats.total) * 100}
+                            color="yellow"
+                          />
+                        </Tooltip>
+                        <Tooltip label={`${t("Board.Practice.Unseen")}: ${lineStats.unseen}`}>
+                          <Progress.Section
+                            value={(lineStats.unseen / lineStats.total) * 100}
+                            color="gray"
+                          />
+                        </Tooltip>
+                      </Progress.Root>
+                    </Stack>
+                    <SimpleGrid cols={3} spacing="xs">
+                      <Paper p="xs" withBorder radius="sm">
+                        <Text fz={10} tt="uppercase" c="dimmed" fw={600}>
+                          {t("Board.Practice.Practiced")}
+                        </Text>
+                        <Text fz="lg" fw={700} c="blue">
+                          {lineStats.practiced}
+                        </Text>
+                      </Paper>
+                      <Paper p="xs" withBorder radius="sm">
+                        <Text fz={10} tt="uppercase" c="dimmed" fw={600}>
+                          {t("Board.Practice.Due")}
+                        </Text>
+                        <Text fz="lg" fw={700} c="yellow">
+                          {lineStats.due}
+                        </Text>
+                      </Paper>
+                      <Paper p="xs" withBorder radius="sm">
+                        <Text fz={10} tt="uppercase" c="dimmed" fw={600}>
+                          {t("Board.Practice.Unseen")}
+                        </Text>
+                        <Text fz="lg" fw={700} c="dimmed">
+                          {lineStats.unseen}
+                        </Text>
+                      </Paper>
+                    </SimpleGrid>
+                  </>
+                )}
+
                 {practiceState.phase === "idle" && (
                   <Stack gap="sm">
-                    {stats.due === 0 && stats.unseen === 0 ? (
-                      <Paper p="sm" withBorder>
-                        <Stack gap="xs" align="center">
-                          <ThemeIcon size="xl" radius="xl" color="green" variant="light">
-                            <IconCheck size={24} />
-                          </ThemeIcon>
-                          <Text ta="center" fw={500}>
-                            {t("Board.Practice.PracticedAll1")}
-                          </Text>
-                          <Text ta="center" fz="sm" c="dimmed">
-                            {t("Board.Practice.PracticedAll2")}{" "}
-                            {dayjs(stats.nextDue).format("MMM D, HH:mm")}
-                          </Text>
-                        </Stack>
-                      </Paper>
-                    ) : (
+                    {stats.due === 0 &&
+                      stats.unseen === 0 &&
+                      (practiceModesVisible.anki || practiceModesVisible.full) && (
+                        <Paper p="sm" withBorder>
+                          <Stack gap="xs" align="center">
+                            <ThemeIcon size="xl" radius="xl" color="green" variant="light">
+                              <IconCheck size={24} />
+                            </ThemeIcon>
+                            <Text ta="center" fw={500}>
+                              {t("Board.Practice.PracticedAll1")}
+                            </Text>
+                            <Text ta="center" fz="sm" c="dimmed">
+                              {t("Board.Practice.PracticedAll2")}{" "}
+                              {dayjs(stats.nextDue).format("MMM D, HH:mm")}
+                            </Text>
+                          </Stack>
+                        </Paper>
+                      )}
+                    {practiceModesVisible.anki && (stats.due > 0 || stats.unseen > 0) && (
                       <Button
                         size="md"
                         variant="light"
@@ -563,32 +827,42 @@ function PracticePanel() {
                         {t("Board.Practice.StartPractice")}
                       </Button>
                     )}
-                    <Button
-                      size="md"
-                      variant="light"
-                      color="gray"
-                      fullWidth
-                      onClick={startFullPractice}
-                      leftSection={<IconBook size={20} />}
-                      justify="space-between"
-                      rightSection={
-                        <Badge size="sm" variant="white" color="gray">
-                          {deck.positions.length}
-                        </Badge>
-                      }
-                    >
-                      {t("Board.Practice.PracticeFullRepertoire")}
-                    </Button>
-                    <Button
-                      size="md"
-                      variant="light"
-                      color="blue"
-                      fullWidth
-                      onClick={startLinesPractice}
-                      leftSection={<IconArrowRight size={20} />}
-                    >
-                      {t("Board.Practice.PracticeLines")}
-                    </Button>
+                    {practiceModesVisible.full && (
+                      <Button
+                        size="md"
+                        variant="light"
+                        color="gray"
+                        fullWidth
+                        onClick={startFullPractice}
+                        leftSection={<IconBook size={20} />}
+                        justify="space-between"
+                        rightSection={
+                          <Badge size="sm" variant="white" color="gray">
+                            {deck.positions.length}
+                          </Badge>
+                        }
+                      >
+                        {t("Board.Practice.PracticeFullRepertoire")}
+                      </Button>
+                    )}
+                    {practiceModesVisible.lines && (
+                      <Button
+                        size="md"
+                        variant="light"
+                        color="blue"
+                        fullWidth
+                        onClick={startLinesPractice}
+                        leftSection={<IconArrowRight size={20} />}
+                        justify="space-between"
+                        rightSection={
+                          <Badge size="sm" variant="white" color="blue">
+                            {lineStats.due + lineStats.unseen}
+                          </Badge>
+                        }
+                      >
+                        {t("Board.Practice.PracticeLines")}
+                      </Button>
+                    )}
                   </Stack>
                 )}
 
@@ -633,6 +907,7 @@ function PracticePanel() {
                               incorrect: 0,
                               streak: 0,
                               bestStreak: 0,
+                              linesCompleted: 0,
                             });
                           }}
                         >
@@ -657,15 +932,183 @@ function PracticePanel() {
 
                 {practiceState.phase === "lines_waiting" && (
                   <Paper p="sm" withBorder>
-                    <Stack gap="xs" align="center">
-                      <Text ta="center" fw={500}>
-                        {t("Board.Practice.LinesMode")} {practiceState.linePath?.length || 0}/{practiceState.lineTargetPath?.length || 0}
-                      </Text>
-                      <Text ta="center" fz="sm" c="dimmed">
-                        {t("Board.Practice.YourTurn", { color: practiceState.lineOrientation === "white" ? t("Common.White") : t("Common.Black") })}
-                      </Text>
+                    <Stack gap="sm">
+                      <Group justify="space-between" align="center" wrap="nowrap">
+                        <Group gap="xs" wrap="nowrap">
+                          <ThemeIcon
+                            size="lg"
+                            radius="md"
+                            variant="light"
+                            color={
+                              practiceState.feedback === "incorrect"
+                                ? "red"
+                                : practiceState.feedback === "correct"
+                                  ? "green"
+                                  : "blue"
+                            }
+                          >
+                            {practiceState.feedback === "incorrect" ? (
+                              <IconX size={18} />
+                            ) : practiceState.feedback === "correct" ? (
+                              <IconCheck size={18} />
+                            ) : (
+                              <IconTarget size={18} />
+                            )}
+                          </ThemeIcon>
+                          <Stack gap={0}>
+                            <Text fz="xs" tt="uppercase" c="dimmed" fw={600}>
+                              {t("Board.Practice.LinesMode")}
+                            </Text>
+                            <Text fw={700}>
+                              {t("Board.Practice.LineCount", {
+                                current: (practiceState.lineIndex ?? 0) + 1,
+                                total: practiceState.lines?.length ?? 0,
+                              })}
+                            </Text>
+                          </Stack>
+                        </Group>
+                        <Group gap={4} wrap="nowrap">
+                          {!practiceState.showSolution && (
+                            <Button
+                              variant="subtle"
+                              size="compact-xs"
+                              onClick={revealSolution}
+                              leftSection={<IconBulb size={14} />}
+                            >
+                              {t("Board.Practice.ShowSolution")}
+                            </Button>
+                          )}
+                          <Button
+                            variant="subtle"
+                            size="compact-xs"
+                            color="red"
+                            onClick={stopLinesPractice}
+                          >
+                            {t("Common.Stop")}
+                          </Button>
+                        </Group>
+                      </Group>
+
+                      {(practiceState.feedback === "incorrect" || practiceState.showSolution) && (
+                        <Paper p="sm" withBorder radius="sm">
+                          <Group justify="space-between" align="center" wrap="nowrap">
+                            <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+                              {practiceState.feedback === "incorrect" &&
+                                !practiceState.showSolution && (
+                                  <Badge
+                                    color="red"
+                                    size="sm"
+                                    variant="light"
+                                    leftSection={<IconX size={12} />}
+                                  >
+                                    {t("Common.Incorrect")}
+                                  </Badge>
+                                )}
+                              {practiceState.showSolution ? (
+                                <Text fz="sm" c="red" fw={600} truncate>
+                                  {t("Board.Practice.CorrectMoveWas", {
+                                    move: practiceState.answer,
+                                  })}
+                                </Text>
+                              ) : (
+                                <Text fz="xs" c="dimmed">
+                                  {t("Board.Practice.TryAgain")}
+                                </Text>
+                              )}
+                            </Group>
+                            {!practiceState.showSolution ? (
+                              <Button variant="light" size="compact-xs" onClick={revealSolution}>
+                                {t("Board.Practice.ShowSolution")}
+                              </Button>
+                            ) : (
+                              <Button
+                                variant="light"
+                                size="compact-xs"
+                                color="green"
+                                onClick={advanceLine}
+                                leftSection={<IconArrowRight size={14} />}
+                              >
+                                {t("Board.Practice.Next")}
+                              </Button>
+                            )}
+                          </Group>
+                        </Paper>
+                      )}
+
+                      <Progress.Root size="sm">
+                        <Tooltip label={`${t("Board.Practice.Practiced")}: ${lineStats.practiced}`}>
+                          <Progress.Section
+                            value={
+                              lineStats.total ? (lineStats.practiced / lineStats.total) * 100 : 0
+                            }
+                            color="blue"
+                          />
+                        </Tooltip>
+                        <Tooltip label={`${t("Board.Practice.Due")}: ${lineStats.due}`}>
+                          <Progress.Section
+                            value={lineStats.total ? (lineStats.due / lineStats.total) * 100 : 0}
+                            color="yellow"
+                          />
+                        </Tooltip>
+                        <Tooltip label={`${t("Board.Practice.Unseen")}: ${lineStats.unseen}`}>
+                          <Progress.Section
+                            value={lineStats.total ? (lineStats.unseen / lineStats.total) * 100 : 0}
+                            color="gray"
+                          />
+                        </Tooltip>
+                      </Progress.Root>
+
+                      <SimpleGrid cols={3} spacing="xs">
+                        <Paper p="xs" withBorder bg="var(--mantine-color-dark-6)">
+                          <Text fz={10} tt="uppercase" c="dimmed" fw={600}>
+                            {t("Board.Practice.Line")}
+                          </Text>
+                          <Text fw={700} c="blue">
+                            {(practiceState.lineIndex ?? 0) + 1}/{practiceState.lines?.length ?? 0}
+                          </Text>
+                        </Paper>
+                        <Paper p="xs" withBorder bg="var(--mantine-color-dark-6)">
+                          <Text fz={10} tt="uppercase" c="dimmed" fw={600}>
+                            {t("Board.Practice.MovesLeftShort")}
+                          </Text>
+                          <Text fw={700}>{userMovesLeft}</Text>
+                        </Paper>
+                        <Paper p="xs" withBorder bg="var(--mantine-color-dark-6)">
+                          <Text fz={10} tt="uppercase" c="dimmed" fw={600}>
+                            {t("Board.Practice.Turn")}
+                          </Text>
+                          <Text fw={700}>
+                            {practiceState.lineOrientation === "white"
+                              ? t("Common.White")
+                              : t("Common.Black")}
+                          </Text>
+                        </Paper>
+                      </SimpleGrid>
+
+                      {practiceState.feedback === "correct" && (
+                        <Badge
+                          color="green"
+                          size="sm"
+                          variant="light"
+                          leftSection={<IconCheck size={12} />}
+                          style={{ alignSelf: "center" }}
+                        >
+                          {t("Common.Correct")}
+                        </Badge>
+                      )}
                     </Stack>
                   </Paper>
+                )}
+                {practiceState.phase === "lines_rating" && sessionStats.mode === "lines" && (
+                  <QualityRatingPanel
+                    onRate={rateLine}
+                    card={
+                      practiceState.lineIndex != null
+                        ? lineDeck.lines[practiceState.lineIndex]?.card
+                        : undefined
+                    }
+                    timeTaken={practiceState.timeTaken}
+                  />
                 )}
                 {practiceState.phase === "incorrect" && (
                   <Paper p="sm" withBorder>
@@ -723,6 +1166,8 @@ function PracticePanel() {
         onConfirm={() => {
           const cards = buildFromTree(root, headers.orientation || "white", headers.start || []);
           setDeck({ positions: cards, logs: [] });
+          const lineCards = buildLinesFromTree(root, headers.start || []);
+          setLineDeck({ lines: lineCards, logs: [] });
           setPracticeState({ phase: "idle" });
           setPracticePath(null);
           setInvisible(false);
@@ -735,6 +1180,7 @@ function PracticePanel() {
             incorrect: 0,
             streak: 0,
             bestStreak: 0,
+            linesCompleted: 0,
           });
           toggleResetModal();
         }}

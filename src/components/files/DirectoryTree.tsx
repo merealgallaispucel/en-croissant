@@ -1,5 +1,6 @@
 import { Badge, Box } from "@mantine/core";
 import {
+  IconArrowRight,
   IconChevronRight,
   IconEye,
   IconFolder,
@@ -12,7 +13,7 @@ import { basename, join, sep } from "@tauri-apps/api/path";
 import { rename } from "@tauri-apps/plugin-fs";
 import clsx from "clsx";
 import Fuse from "fuse.js";
-import { useAtom, useSetAtom } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useContextMenu } from "mantine-contextmenu";
 import Draggable, { type DraggableEvent } from "react-draggable";
 import {
@@ -24,11 +25,18 @@ import {
   createContext,
   useContext,
 } from "react";
-import { activeTabAtom, deckAtomFamily, tabsAtom, expandedDirectoriesAtom } from "@/state/atoms";
+import {
+  activeTabAtom,
+  deckAtomFamily,
+  lineDeckAtomFamily,
+  practiceModesVisibleAtom,
+  tabsAtom,
+  expandedDirectoriesAtom,
+} from "@/state/atoms";
 import { openFile } from "@/utils/files";
 import classes from "./DirectoryTree.module.css";
 import type { Directory, FileMetadata } from "./file";
-import { getStats } from "./opening";
+import { getLineStats, getStats } from "./opening";
 import { FileIcon } from "./FileIcon";
 
 type DragContextType = {
@@ -504,6 +512,7 @@ function DirectoryNode({
           {node.type === "file" && node.metadata.type === "repertoire" && (
             <div className={classes.badge}>
               <DuePositions file={node.path} />
+              <DueLines file={node.path} />
             </div>
           )}
         </div>
@@ -520,14 +529,35 @@ function DuePositions({ file }: { file: string }) {
       game: 0,
     }),
   );
+  const modes = useAtomValue(practiceModesVisibleAtom);
 
   const stats = getStats(deck.positions);
 
-  if (stats.due + stats.unseen === 0) return null;
+  if (!(modes.anki || modes.full) || stats.due + stats.unseen === 0) return null;
 
   return (
     <Badge size="xs" variant="light" leftSection={<IconTarget size={10} />}>
       {stats.due + stats.unseen}
+    </Badge>
+  );
+}
+
+function DueLines({ file }: { file: string }) {
+  const [lineDeck] = useAtom(
+    lineDeckAtomFamily({
+      file,
+      game: 0,
+    }),
+  );
+  const modes = useAtomValue(practiceModesVisibleAtom);
+
+  const lineStats = getLineStats(lineDeck.lines);
+
+  if (!modes.lines || lineStats.due + lineStats.unseen === 0) return null;
+
+  return (
+    <Badge size="xs" variant="light" leftSection={<IconArrowRight size={10} />}>
+      {lineStats.due + lineStats.unseen}
     </Badge>
   );
 }

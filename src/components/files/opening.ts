@@ -1,55 +1,154 @@
 import type { SetStateAction } from "react";
 import { type Card, createEmptyCard, fsrs, type Grade, generatorParameters } from "ts-fsrs";
 import { z } from "zod";
-import type { PracticeData } from "@/state/atoms";
+import type { LineDeckData, PracticeData } from "@/state/atoms";
 import { isPrefix } from "@/utils/misc";
 import { type TreeNode, treeIterator } from "@/utils/treeReducer";
 
 const params = generatorParameters({ enable_fuzz: true });
 
 const f = fsrs(params);
-// Extract all main lines from the tree for lines mode practice
+// Extract every complete line (root-to-leaf path) that starts at the given
+// start path. Each multi-child node creates a new variation, so each distinct
+// move choice yields its own line to practice.
 export function getLinesFromTree(tree: TreeNode, start: number[] = []): number[][] {
     const lines: number[][] = [];
-    const stack: { path: number[]; node: TreeNode }[] = [{ path: [], node: tree }];
-    
-    while (stack.length > 0) {
-        const { path, node } = stack.pop()!;
-        
-        // Skip if this is before the start position
-        if (!isPrefix(start, path)) {
-            continue;
+
+    const dfs = (node: TreeNode, path: number[]) => {
+        if (node.children.length === 0) {
+            if (path.length > start.length && isPrefix(start, path)) {
+                lines.push(path);
+            }
+            return;
         }
-        
-        // If this node has children, it's part of a line
-        if (node.children.length > 0) {
-            // Follow the main line (first child)
-            const mainLinePath = [...path, 0];
-            const mainLineNode = node.children[0];
-            
-            // Add the complete main line from this point
-            let currentPath = [...path];
-            let currentNode = node;
-            const line: number[] = [...path];
-            
-            while (currentNode.children.length > 0) {
-                line.push(0); // Always take the first child for main line
-                currentNode = currentNode.children[0];
-            }
-            
-            // Only add if the line has moves beyond the start position
-            if (line.length > start.length) {
-                lines.push(line);
-            }
-            
-            // Also explore variations
-            for (let i = 1; i < node.children.length; i++) {
-                stack.push({ path: [...path, i], node: node.children[i] });
+        for (let i = 0; i < node.children.length; i++) {
+            dfs(node.children[i], [...path, i]);
+        }
+    };
+
+    dfs(tree, []);
+    return lines;
+}
+
+export const lineSchema = z.object({
+    key: z.string(),
+    path: z.array(z.number()),
+    card: z.object({}).passthrough(),
+});
+
+export type PracticeLine = {
+    key: string;
+    path: number[];
+    card: Card;
+};
+
+// Stable identifier for a line: the SAN sequence of all its moves.
+export function getLineKey(tree: TreeNode, path: number[]): string {
+    const sans: string[] = [];
+    let node = tree;
+    for (const idx of path) {
+        node = node.children[idx];
+        if (!node) break;
+        sans.push(node.san ?? "?");
+    }
+    return sans.join("|");
+}
+
+export function buildLinesFromTree(tree: TreeNode, start: number[] = []): PracticeLine[] {
+    return getLinesFromTree(tree, start).map((path) => ({
+        key: getLineKey(tree, path),
+        path,
+        card: createEmptyCard(),
+    }));
+}
+
+export function getLineStats(lines: PracticeLine[]): Stats {
+    const stats: Stats = {
+        unseen: 0,
+        due: 0,
+        practiced: 0,
+        nextDue: null,
+        total: lines.length,
+    };
+    const now = new Date();
+    for (const line of lines) {
+        const dueDate = new Date(line.card.due);
+        if (line.card.reps === 0) {
+            stats.unseen++;
+        } else if (dueDate <= now) {
+            stats.due++;
+        } else {
+            stats.practiced++;
+            if (!stats.nextDue || dueDate < stats.nextDue) {
+                stats.nextDue = dueDate;
             }
         }
     }
-    
-    return lines;
+    return stats;
+}
+
+export function getLineForReview(
+    lines: PracticeLine[],
+): { index: number; line: PracticeLine } | null {
+    const now = new Date();
+    for (let i = 0; i < lines.length; i++) {
+        if (new Date(lines[i].card.due) <= now) {
+            return { index: i, line: lines[i] };
+        }
+    }
+    return null;
+}
+
+export function updateLinePerformance(
+    setLines: React.Dispatch<SetStateAction<LineDeckData>>,
+    i: number,
+    card: Card,
+    grade: 1 | 2 | 3 | 4,
+) {
+    const schedulingCards = f.repeat(card, new Date());
+
+    const { card: newCard, log } = schedulingCards[grade];
+
+    setLines((data) => {
+        data.lines[i].card = newCard;
+        data.logs.push({ ...log, line: data.lines[i].key });
+        return data;
+    });
+}
+
+export function scheduleLineCard(card: Card, grade: 1 | 2 | 3 | 4): Card {
+    const { card: newCard } = f.repeat(card, new Date())[grade];
+    return newCard;
+}
+
+export function syncLinesDeck(
+    existing: PracticeLine[],
+    tree: TreeNode,
+    start: number[],
+): { lines: PracticeLine[]; added: number; removed: number } {
+    const freshLines = buildLinesFromTree(tree, start);
+
+    const existingByKey = new Map<string, PracticeLine>();
+    for (const line of existing) {
+        existingByKey.set(line.key, line);
+    }
+
+    let added = 0;
+    const merged: PracticeLine[] = [];
+    for (const line of freshLines) {
+        const prev = existingByKey.get(line.key);
+        if (prev) {
+            merged.push({ ...prev, path: line.path });
+        } else {
+            merged.push(line);
+            added++;
+        }
+    }
+
+    const freshKeys = new Set(freshLines.map((l) => l.key));
+    const removed = existing.filter((l) => !freshKeys.has(l.key)).length;
+
+    return { lines: merged, added, removed };
 }
 
 export const positionSchema = z.object({

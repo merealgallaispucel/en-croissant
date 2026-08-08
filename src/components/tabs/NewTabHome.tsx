@@ -11,16 +11,18 @@ import {
   Tooltip,
   UnstyledButton,
 } from "@mantine/core";
-import { useAtom, useSetAtom, useStore } from "jotai";
+import { useAtom, useAtomValue, useSetAtom, useStore } from "jotai";
 import { useCallback, useEffect, useState } from "react";
 import {
   activeTabAtom,
   addRecentFileAtom,
   deckAtomFamily,
+  lineDeckAtomFamily,
   type RecentFile,
   recentFilesAtom,
   tabFamily,
   tabsAtom,
+  practiceModesVisibleAtom,
 } from "@/state/atoms";
 import type { Tab } from "@/utils/tabs";
 import { createTab } from "@/utils/tabs";
@@ -29,6 +31,7 @@ import CreateRepertoireModal from "./CreateRepertoireModal";
 import ImportModal from "./ImportModal";
 import classes from "./NewTabHome.module.css";
 import {
+  IconArrowRight,
   IconChess,
   IconClock,
   IconFileImport,
@@ -41,7 +44,7 @@ import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
 import { useTranslation } from "react-i18next";
 import { commands } from "@/bindings";
-import { getStats } from "@/components/files/opening";
+import { getLineStats, getStats } from "@/components/files/opening";
 import Chessboard from "../icons/Chessboard";
 import { FileIcon } from "@/components/files/FileIcon";
 
@@ -54,14 +57,35 @@ function RecentFileDuePositions({ file }: { file: string }) {
       game: 0,
     }),
   );
+  const modes = useAtomValue(practiceModesVisibleAtom);
 
   const stats = getStats(deck.positions);
 
-  if (stats.due + stats.unseen === 0) return null;
+  if (!(modes.anki || modes.full) || stats.due + stats.unseen === 0) return null;
 
   return (
     <Badge size="sm" variant="light" color="orange" leftSection={<IconTarget size="0.75rem" />}>
       {stats.due + stats.unseen} due
+    </Badge>
+  );
+}
+
+function RecentFileDueLines({ file }: { file: string }) {
+  const [lineDeck] = useAtom(
+    lineDeckAtomFamily({
+      file,
+      game: 0,
+    }),
+  );
+  const modes = useAtomValue(practiceModesVisibleAtom);
+
+  const lineStats = getLineStats(lineDeck.lines);
+
+  if (!modes.lines || lineStats.due + lineStats.unseen === 0) return null;
+
+  return (
+    <Badge size="sm" variant="light" color="blue" leftSection={<IconArrowRight size="0.75rem" />}>
+      {lineStats.due + lineStats.unseen}
     </Badge>
   );
 }
@@ -87,7 +111,12 @@ function RecentFileRow({ file, onOpen }: { file: RecentFile; onOpen: (file: Rece
           <Text size="sm" truncate fw={500}>
             {displayName}
           </Text>
-          {file.type === "repertoire" && <RecentFileDuePositions file={file.path} />}
+          {file.type === "repertoire" && (
+            <>
+              <RecentFileDuePositions file={file.path} />
+              <RecentFileDueLines file={file.path} />
+            </>
+          )}
         </Group>
         <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
           <Tooltip label={dayjs(file.lastOpened).format("YYYY-MM-DD HH:mm")}>

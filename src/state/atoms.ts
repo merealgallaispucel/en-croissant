@@ -16,7 +16,12 @@ import type { ReviewLog } from "ts-fsrs";
 import { z } from "zod";
 import type { BestMoves, GoMode } from "@/bindings";
 import { DEFAULT_TIME_CONTROL, type OpponentSettings } from "@/components/boards/OpponentForm";
-import { type Position, positionSchema } from "@/components/files/opening";
+import {
+    type Position,
+    positionSchema,
+    type PracticeLine,
+    lineSchema,
+} from "@/components/files/opening";
 import type { LocalOptions } from "@/components/panels/database/DatabasePanel";
 import { positionFromFen, swapMove } from "@/utils/chessops";
 import type { SuccessDatabaseInfo } from "@/utils/db";
@@ -492,13 +497,37 @@ export const deckAtomFamily = atomFamily(
     (a, b) => a.file === b.file && a.game === b.game,
 );
 
+const lineReviewLogSchema = z.object({ line: z.string() }).passthrough();
+
+const lineDeckSchema = z.object({
+    lines: lineSchema.array(),
+    logs: lineReviewLogSchema.array(),
+});
+
+export type LineDeckData = {
+    lines: PracticeLine[];
+    logs: (ReviewLog & { line: string })[];
+};
+
+export const lineDeckAtomFamily = atomFamily(
+    ({ file, game }: { file: string; game: number }) =>
+        atomWithStorage<LineDeckData>(
+            `deck-lines-${file}-${game}`,
+            { lines: [], logs: [] },
+            createZodStorage(lineDeckSchema, localStorage) as any as SyncStorage<LineDeckData>, // TODO: fix types
+        ),
+
+    (a, b) => a.file === b.file && a.game === b.game,
+);
+
 export type PracticePhase =
     | "idle" // Not practicing
     | "waiting" // Waiting for user to make a move
     | "correct" // Move was correct, waiting for quality rating
     | "incorrect" // Move was incorrect, showing feedback
     | "lines_waiting" // Waiting for user to make a move in lines mode
-    | "lines_correct"; // Move was correct in lines mode, waiting for opponent move
+    | "lines_correct" // Move was correct in lines mode, waiting for opponent move
+    | "lines_rating"; // Line finished, waiting for the user to rate it
 
 export type PracticeState = {
     phase: PracticePhase;
@@ -508,9 +537,13 @@ export type PracticeState = {
     timeTaken?: number;
     positionIndex?: number;
     // Lines mode specific fields
-    linePath?: number[]; // Current path in the line being practiced
     lineTargetPath?: number[]; // Target path to reach in lines mode
     lineOrientation?: "white" | "black"; // Orientation for lines mode
+    lines?: number[][]; // All the lines to practice as a sequence
+    lineIndex?: number; // Current line index in the sequence
+    autoAdvance?: boolean; // After an error, auto-play the correct move to continue
+    showSolution?: boolean; // In lines mode, reveal the correct move after an error
+    feedback?: "correct" | "incorrect"; // Last move evaluation shown in the panel
 };
 
 export const practiceStateFamily = atomFamily((_tab: string) =>
@@ -525,6 +558,7 @@ export type PracticeSessionStats = {
     incorrect: number;
     streak: number;
     bestStreak: number;
+    linesCompleted: number; // Number of lines fully drilled in the current session
 };
 
 const practiceSessionStatsFamily = atomFamily((_tab: string) =>
@@ -535,6 +569,7 @@ const practiceSessionStatsFamily = atomFamily((_tab: string) =>
         incorrect: 0,
         streak: 0,
         bestStreak: 0,
+        linesCompleted: 0,
     }),
 );
 export const practiceSessionStatsAtom = tabValue(practiceSessionStatsFamily);
@@ -542,6 +577,17 @@ export const practiceSessionStatsAtom = tabValue(practiceSessionStatsFamily);
 export const practiceAutoDifficultyAtom = atomWithStorage<"none" | "1" | "2" | "3" | "4">(
     "practice-auto-difficulty",
     "none",
+);
+
+export type PracticeModesVisibility = {
+    anki: boolean;
+    full: boolean;
+    lines: boolean;
+};
+
+export const practiceModesVisibleAtom = atomWithStorage<PracticeModesVisibility>(
+    "practice-modes-visible",
+    { anki: true, full: true, lines: true },
 );
 
 const practiceCardStartTimeFamily = atomFamily((_tab: string) => atom<number>(0));

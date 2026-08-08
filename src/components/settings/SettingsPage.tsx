@@ -69,6 +69,7 @@ import FontSizeSlider from "./FontSizeSlider";
 import KeybindInput from "./KeybindInput";
 import PiecesSelect from "./PiecesSelect";
 import RepertoireMinGamesSetting from "./RepertoireMinGamesSetting";
+import RepertoirePracticeModesSetting from "./RepertoirePracticeModesSetting";
 import classes from "./SettingsPage.module.css";
 import SettingsSwitch from "./SettingsSwitch";
 import SoundSelect from "./SoundSelect";
@@ -516,6 +517,14 @@ export default function Page() {
             onChange={(val) => setPracticeAutoDifficulty(val as "none" | "1" | "2" | "3" | "4")}
           />
         ),
+      },
+      {
+        id: "repertoire-practice-modes",
+        category: "repertoire",
+        title: t("Settings.Repertoire.PracticeModes"),
+        description: t("Settings.Repertoire.PracticeModes.Desc"),
+        keywords: ["repertoire", "practice", "modes", "lines", "full", "anki"],
+        render: () => <RepertoirePracticeModesSetting />,
       },
       // Sound settings
       {

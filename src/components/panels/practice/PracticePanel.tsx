@@ -276,19 +276,18 @@ function PracticePanel() {
     const orientation = headers.orientation || "white";
     const start = headers.start || [];
     
-    // Get all lines from the tree - for now just get the main line
+    // Build the main line path from the start position
     const line: number[] = [];
-    let currentNode = root;
-    let currentPath: number[] = [...start];
+    let currentNode = getNodeAtPath(root, start);
     
     // Follow the main line (first child) to build the path
-    while (currentNode.children.length > 0) {
+    while (currentNode && currentNode.children.length > 0) {
       line.push(0);
       currentNode = currentNode.children[0];
-      currentPath.push(0);
     }
     
     if (line.length === 0) {
+      // No moves in the line, cannot practice
       return;
     }
     
@@ -302,6 +301,9 @@ function PracticePanel() {
     };
     
     setSessionStats((prev) => ({ ...prev, ...stats }));
+    
+    // Ensure we're on the train tab for practicing
+    setTab("train");
     
     // Start from the beginning of the line
     goToMove(start);

@@ -211,15 +211,26 @@ function Board({
               const newLinePath = [...linePath, expectedNextMoveIndex];
               const newPosition = [...currentPosition, expectedNextMoveIndex];
               
+              // Update session stats
+              setSessionStats((prev) => ({
+                ...prev,
+                correct: prev.correct + 1,
+                streak: prev.streak + 1,
+                bestStreak: Math.max(prev.bestStreak, prev.streak + 1),
+              }));
+              
               // Check if we need to play opponent's move automatically
+              // Only play opponent move if it's their turn (not our orientation)
               if (newLinePath.length < lineTargetPath.length) {
                 const nextMoveIndex = lineTargetPath[newLinePath.length];
                 const nextNode = getNodeAtPath(root, newPosition);
                 
                 if (nextNode.children.length > nextMoveIndex) {
                   const nextMoveNode = nextNode.children[nextMoveIndex];
+                  const nextPos = positionFromFen(nextNode.fen);
                   
-                  if (nextMoveNode && nextMoveNode.move) {
+                  // Check if it's opponent's turn (not our orientation)
+                  if (nextPos && nextPos.turn !== lineOrientation) {
                     // Play the opponent's move automatically after a short delay
                     await new Promise((resolve) => setTimeout(resolve, 300));
                     storeMakeMove({
@@ -235,17 +246,14 @@ function Board({
                       lineTargetPath: lineTargetPath,
                       lineOrientation: lineOrientation,
                     });
-                    
-                    // Update session stats
-                    setSessionStats((prev) => ({
-                      ...prev,
-                      correct: prev.correct + 1,
-                      streak: prev.streak + 1,
-                      bestStreak: Math.max(prev.bestStreak, prev.streak + 1),
-                    }));
                   } else {
-                    // No more moves in the line
-                    endLinesPractice();
+                    // It's our turn again, wait for user input
+                    setPracticeState({
+                      phase: "lines_waiting",
+                      linePath: newLinePath,
+                      lineTargetPath: lineTargetPath,
+                      lineOrientation: lineOrientation,
+                    });
                   }
                 } else {
                   // No more moves in the line

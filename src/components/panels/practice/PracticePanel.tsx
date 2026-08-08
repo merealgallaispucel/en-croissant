@@ -655,6 +655,18 @@ function PracticePanel() {
                   />
                 )}
 
+                {practiceState.phase === "lines_waiting" && (
+                  <Paper p="sm" withBorder>
+                    <Stack gap="xs" align="center">
+                      <Text ta="center" fw={500}>
+                        {t("Board.Practice.LinesMode")} {practiceState.linePath?.length || 0}/{practiceState.lineTargetPath?.length || 0}
+                      </Text>
+                      <Text ta="center" fz="sm" c="dimmed">
+                        {t("Board.Practice.YourTurn", { color: practiceState.lineOrientation === "white" ? t("Common.White") : t("Common.Black") })}
+                      </Text>
+                    </Stack>
+                  </Paper>
+                )}
                 {practiceState.phase === "incorrect" && (
                   <Paper p="sm" withBorder>
                     <Stack gap="xs" align="center">

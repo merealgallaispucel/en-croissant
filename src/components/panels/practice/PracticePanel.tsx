@@ -274,7 +274,7 @@ function PracticePanel() {
 
   function startLinesPractice() {
     const orientation = headers.orientation || "white";
-    const start = headers.start || [];
+    let start = headers.start || [];
     
     // Build the main line path from the start position
     const line: number[] = [];
@@ -291,6 +291,52 @@ function PracticePanel() {
       return;
     }
     
+    // Adjust start position: we want to start at a position where it's our turn to play
+    let adjustedStart = [...start];
+    let currentNodeAtStart = getNodeAtPath(root, adjustedStart);
+    
+    // Keep going back until we find a position where it's our turn to play
+    while (adjustedStart.length > 0) {
+      const currentNode = getNodeAtPath(root, adjustedStart);
+      const currentPos = positionFromFen(currentNode.fen);
+      
+      if (currentPos && currentPos.turn === orientation) {
+        // Found a position where it's our turn
+        break;
+      }
+      
+      // Go back one move
+      adjustedStart = adjustedStart.slice(0, -1);
+      
+      // If we reach the root and it's still not our turn, we'll start from root anyway
+      if (adjustedStart.length === 0) {
+        const rootPos = positionFromFen(root.fen);
+        if (rootPos && rootPos.turn !== orientation) {
+          // At root it's opponent's turn, we need to play their first move automatically
+          // For now, just start from root and let the user know
+          break;
+        }
+      }
+    }
+    
+    start = adjustedStart;
+    
+    // If at root and it's not our turn, we need to play the first move automatically
+    // to get to a position where it's our turn
+    const finalNode = getNodeAtPath(root, start);
+    const finalPos = positionFromFen(finalNode.fen);
+    
+    if (finalPos && finalPos.turn !== orientation && start.length === 0 && root.children.length > 0) {
+      // Play the first move automatically to get to opponent's turn
+      // Then it will be our turn
+      const firstMove = root.children[0];
+      if (firstMove.move) {
+        // We'll handle this in the Board component by checking if we need to auto-play first move
+        // For now, just add a flag to indicate we need to auto-play
+        
+      }
+    }
+    
     const stats: Partial<PracticeSessionStats> = {
       mode: "lines",
       remainingPositions: [],
@@ -305,7 +351,7 @@ function PracticePanel() {
     // Ensure we're on the train tab for practicing
     setTab("train");
     
-    // Start from the beginning of the line
+    // Start from the adjusted position
     goToMove(start);
     setPracticePath(start);
     setInvisible(true);

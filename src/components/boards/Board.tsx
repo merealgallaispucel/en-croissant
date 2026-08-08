@@ -219,6 +219,13 @@ function Board({
                 bestStreak: Math.max(prev.bestStreak, prev.streak + 1),
               }));
               
+              // Show positive feedback
+              notifications.show({
+                title: t("Board.Practice.Correct"),
+                message: t("Common.Correct"),
+                color: "green",
+              });
+              
               // Check if we need to play opponent's move automatically
               // Only play opponent move if it's their turn (not our orientation)
               if (newLinePath.length < lineTargetPath.length) {
@@ -433,7 +440,7 @@ function Board({
     !!headers.white_time_control ||
     !!headers.black_time_control;
 
-  const practiceLock = !!practicing && !deck.positions.find((c) => c.fen === currentNode.fen);
+  const practiceLock = !!practicing && sessionStats.mode !== "lines" && !deck.positions.find((c) => c.fen === currentNode.fen);
 
   const movableColor: "white" | "black" | "both" | undefined = useMemo(() => {
     return practiceLock

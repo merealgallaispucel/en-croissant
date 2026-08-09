@@ -584,6 +584,7 @@
     "Settings.MoveNotation.Desc": "Choisissez le mode d'affichage des notes",
     "Settings.MoveNotation.Letters": "Lettres (K Q R B N)",
     "Settings.MoveNotation.Symbols": "Symboles (♔♕♖♗♘)",
+    "Settings.MoveNotation.French": "Français (R D T F C)",
     "Settings.PieceDest": "Destinations des pièces",
     "Settings.PieceDest.Desc": "Affiche les mouvements possibles de chaque pièce",
     "Settings.PreviewBoard": "Aperçu de l'échiquier",

@@ -228,10 +228,11 @@ export default function Page() {
             data={[
               { label: t("Settings.MoveNotation.Letters"), value: "letters" },
               { label: t("Settings.MoveNotation.Symbols"), value: "symbols" },
+              { label: t("Settings.MoveNotation.French"), value: "french" },
             ]}
             allowDeselect={false}
             value={moveNotationType}
-            onChange={(val) => setMoveNotationType(val as "letters" | "symbols")}
+            onChange={(val) => setMoveNotationType(val as "letters" | "symbols" | "french")}
           />
         ),
       },
